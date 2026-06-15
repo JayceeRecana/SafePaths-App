@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import '../widgets/bottom_nav_bar.dart';
-import 'map_dashboard_screen.dart';
-import 'route_planner_screen.dart';
-import 'notifications_screen.dart';
-import 'admin_panel_screen.dart';
+import '../../widgets/bottom_nav_bar.dart';
+import '../user/map_dashboard_screen.dart';
+import '../user/route_planner_screen.dart';
+import '../user/notifications_screen.dart';
+import '../admin/admin_panel_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});

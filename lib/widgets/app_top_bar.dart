@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_colors.dart';
-import '../screens/settings_screen.dart';
+import '../screens/shared/settings_screen.dart';
+import '../screens/user/profile_screen.dart';
 
 class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
   final String? title;
@@ -45,7 +46,11 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              if (showBackButton)
+              // Only show the back button when there is actually a route to go back to.
+              // Screens used as tabs in an IndexedStack have showBackButton: true but
+              // Navigator.canPop() is false — showing the button there would let users
+              // pop the root route and land on a black screen.
+              if (showBackButton && Navigator.of(context).canPop())
                 GestureDetector(
                   onTap: onBackPressed ?? () => Navigator.of(context).pop(),
                   child: Container(
@@ -60,31 +65,41 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
                     ),
                   ),
                 ),
+              
+              // 2. Wrap the Profile Icon in a GestureDetector for navigation
               if (showProfile && !showBackButton)
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
-                    color: AppColors.primaryContainer,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 4,
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.person,
-                    color: AppColors.onPrimaryContainer,
-                    size: 18,
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                    );
+                  },
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      color: AppColors.primaryContainer,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 4,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.person,
+                      color: AppColors.onPrimaryContainer,
+                      size: 18,
+                    ),
                   ),
                 ),
+                
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  title ?? 'Serene Guardian',
+                  title ?? 'SafePaths', // Updated default title to match project
                   style: GoogleFonts.manrope(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,

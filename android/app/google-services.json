@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "732632931995",
+    "project_id": "safepaths-92c3d",
+    "storage_bucket": "safepaths-92c3d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:732632931995:android:f7583ff313fd503ad9703e",
+        "android_client_info": {
+          "package_name": "com.safepaths.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFxhY11mCkaKde2RxXw1qvtBeahdFzYdc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:732632931995:android:0506a6fe0e5e8bb8d9703e",
+        "android_client_info": {
+          "package_name": "com.safepaths.safepaths_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFxhY11mCkaKde2RxXw1qvtBeahdFzYdc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

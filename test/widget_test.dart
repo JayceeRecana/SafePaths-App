@@ -8,7 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:safepaths_app/screens/login_screen.dart';
+import 'package:safepaths_app/screens/shared/login_screen.dart';
 
 void main() {
   testWidgets('Login screen renders key actions', (WidgetTester tester) async {

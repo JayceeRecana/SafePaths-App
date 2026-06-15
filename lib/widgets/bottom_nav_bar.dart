@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
+import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class BottomNavBar extends StatelessWidget {
   final int currentIndex;
@@ -56,14 +58,6 @@ class BottomNavBar extends StatelessWidget {
                 onTap: () => onTap(2),
                 hasNotification: true,
               ),
-              _NavItem(
-                icon: Icons.shield_outlined,
-                activeIcon: Icons.shield,
-                label: 'ADMIN',
-                isActive: currentIndex == 3,
-                onTap: () => onTap(3),
-                hasNotification: false,
-              ),
             ],
           ),
         ),
@@ -72,7 +66,7 @@ class BottomNavBar extends StatelessWidget {
   }
 }
 
-class _NavItem extends StatelessWidget {
+class _NavItem extends StatefulWidget {
   final IconData icon;
   final IconData activeIcon;
   final String label;
@@ -90,62 +84,115 @@ class _NavItem extends StatelessWidget {
   });
 
   @override
+  State<_NavItem> createState() => _NavItemState();
+}
+
+class _NavItemState extends State<_NavItem>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+    _animation = Tween<double>(begin: 1.0, end: 1.2).animate(_controller);
+    
+    if (!widget.hasNotification || widget.isActive) {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _NavItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.hasNotification && !widget.isActive) {
+      if (!_controller.isAnimating) {
+        _controller.repeat(reverse: true);
+      }
+    } else {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        widget.onTap();
+      },
       behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isActive
-              ? const Color(0xFFDBEAFE)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(
-                  isActive ? activeIcon : icon,
-                  size: 24,
-                  color: isActive
+      child: Semantics(
+        button: true,
+        selected: widget.isActive,
+        label: widget.label,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          transform: widget.isActive ? (Matrix4.identity()..scale(1.05)) : Matrix4.identity(),
+          decoration: BoxDecoration(
+            color: widget.isActive
+                ? const Color(0xFFDBEAFE)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    widget.isActive ? widget.activeIcon : widget.icon,
+                    size: 24,
+                    color: widget.isActive
+                        ? const Color(0xFF1D4ED8)
+                        : const Color(0xFF94A3B8),
+                  ),
+                  if (widget.hasNotification && !widget.isActive)
+                    Positioned(
+                      top: -2,
+                      right: -4,
+                      child: AnimatedBuilder(
+                        animation: _animation,
+                        builder: (context, child) => Transform.scale(
+                          scale: _animation.value,
+                          child: Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: AppColors.error,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                widget.label,
+                style: GoogleFonts.inter(
+                  fontSize: 10,
+                  fontWeight: widget.isActive ? FontWeight.w800 : FontWeight.w500,
+                  color: widget.isActive
                       ? const Color(0xFF1D4ED8)
                       : const Color(0xFF94A3B8),
                 ),
-                if (hasNotification && !isActive)
-                  Positioned(
-                    top: -2,
-                    right: -4,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: AppColors.error,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.0,
-                color: isActive
-                    ? const Color(0xFF1D4ED8)
-                    : const Color(0xFF94A3B8),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

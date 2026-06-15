@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import '../../theme/app_colors.dart';
+import '../../services/user_service.dart';
 import 'registration_screen.dart';
-import 'home_screen.dart';
+import '../user/user_home_screen.dart';
+import '../admin/admin_home_screen.dart';
 import 'password_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -25,11 +27,23 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _login() {
+  void _login() async {
     // TEMPORARY: Bypassing login validation since there is no backend yet
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
-    );
+    // Check if user has a stored role, otherwise default to user
+    final role = await UserService.getUserRole();
+    await UserService.setLoggedIn(true);
+
+    if (!mounted) return;
+
+    if (role == UserRole.admin) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
+      );
+    } else {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const UserHomeScreen()),
+      );
+    }
   }
 
   void _showNotAvailableMessage(String provider) {
@@ -408,6 +422,56 @@ class _LoginScreenState extends State<LoginScreen> {
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
                                 color: AppColors.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      // DEV: Skip buttons for UI testing
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () async {
+                                await UserService.saveUserRole(UserRole.user);
+                                await UserService.setLoggedIn(true);
+                                if (!context.mounted) return;
+                                Navigator.of(context).pushReplacement(
+                                  MaterialPageRoute(
+                                    builder: (_) => const UserHomeScreen(),
+                                  ),
+                                );
+                              },
+                              child: Text(
+                                'Skip to User',
+                                style: GoogleFonts.inter(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () async {
+                                await UserService.saveUserRole(UserRole.admin);
+                                await UserService.setLoggedIn(true);
+                                if (!context.mounted) return;
+                                Navigator.of(context).pushReplacement(
+                                  MaterialPageRoute(
+                                    builder: (_) => const AdminHomeScreen(),
+                                  ),
+                                );
+                              },
+                              child: Text(
+                                'Skip to Admin',
+                                style: GoogleFonts.inter(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.primary,
+                                ),
                               ),
                             ),
                           ),

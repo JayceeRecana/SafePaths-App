@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import '../../theme/app_colors.dart';
+import '../../services/user_service.dart';
 import 'login_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
@@ -18,7 +19,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
-  void _register() {
+  void _register() async {
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text;
@@ -52,8 +53,15 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       return;
     }
 
+    // Save user role and login state
+    final role = _selectedRole == 0 ? UserRole.user : UserRole.admin;
+    await UserService.saveUserRole(role);
+    await UserService.setLoggedIn(true);
+
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Registration successful. Please login.')),
+      const SnackBar(content: Text('Registration successful.')),
     );
     Navigator.of(context).pop();
   }

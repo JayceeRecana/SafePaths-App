@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
-import '../widgets/app_top_bar.dart';
+import '../../theme/app_colors.dart';
+import '../../widgets/app_top_bar.dart';
+import '../../services/app_state_service.dart';
 
 class BroadcastAlertScreen extends StatefulWidget {
   const BroadcastAlertScreen({super.key});
@@ -193,17 +194,32 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
     );
   }
 
-  void _broadcastAlert() {
-    if (_titleController.text.trim().isEmpty || _messageController.text.trim().isEmpty) {
+  void _broadcastAlert() async {
+    final title = _titleController.text.trim();
+    final message = _messageController.text.trim();
+
+    if (title.isEmpty || message.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please complete title and message.')),
       );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Alert sent to all active users.')),
-    );
-    Navigator.of(context).pop();
+
+    String severityText = 'Warning';
+    if (_severity == 0) severityText = 'Advisory';
+    if (_severity == 2) severityText = 'Critical';
+
+    await AppStateService.instance.broadcastAlert(title, message, severityText);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alert sent to all active users.')),
+      );
+      // Only pop when pushed as a route — not when used as the Alerts tab.
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+    }
   }
 }
 
