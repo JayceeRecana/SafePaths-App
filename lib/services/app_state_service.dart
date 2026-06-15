@@ -10,6 +10,7 @@ class RoadStatus {
   final String notes;
   final DateTime updatedAt;
   final Map<String, dynamic>? geometry;
+  final int? confidence;
 
   RoadStatus({
     required this.id,
@@ -18,6 +19,7 @@ class RoadStatus {
     required this.notes,
     required this.updatedAt,
     this.geometry,
+    this.confidence,
   });
 
   Map<String, dynamic> toJson() => {
@@ -27,6 +29,7 @@ class RoadStatus {
         'notes': notes,
         'updatedAt': Timestamp.fromDate(updatedAt),
         if (geometry != null) 'geometry': geometry,
+        if (confidence != null) 'confidence': confidence,
       };
 
   factory RoadStatus.fromJson(Map<String, dynamic> json) {
@@ -39,6 +42,7 @@ class RoadStatus {
       notes: json['notes'] ?? '',
       updatedAt: date,
       geometry: json['geometry'] as Map<String, dynamic>?,
+      confidence: json['confidence'] as int?,
     );
   }
 
@@ -47,6 +51,7 @@ class RoadStatus {
     String? notes,
     DateTime? updatedAt,
     Map<String, dynamic>? geometry,
+    int? confidence,
   }) =>
       RoadStatus(
         id: id,
@@ -55,6 +60,7 @@ class RoadStatus {
         notes: notes ?? this.notes,
         updatedAt: updatedAt ?? this.updatedAt,
         geometry: geometry ?? this.geometry,
+        confidence: confidence ?? this.confidence,
       );
 }
 
@@ -65,6 +71,7 @@ class UserReport {
   final DateTime createdAt;
   final String severity; // 'Low', 'Medium', 'High'
   final String status; // 'pending', 'verified', 'dismissed'
+  final String? roadId;
 
   UserReport({
     required this.id,
@@ -73,6 +80,7 @@ class UserReport {
     required this.createdAt,
     required this.severity,
     required this.status,
+    this.roadId,
   });
 
   Map<String, dynamic> toJson() => {
@@ -82,6 +90,7 @@ class UserReport {
         'createdAt': Timestamp.fromDate(createdAt),
         'severity': severity,
         'status': status,
+        if (roadId != null) 'roadId': roadId,
       };
 
   factory UserReport.fromJson(Map<String, dynamic> json) {
@@ -94,11 +103,13 @@ class UserReport {
       createdAt: date,
       severity: json['severity'] ?? 'Low',
       status: json['status'] ?? 'pending',
+      roadId: json['roadId'] as String?,
     );
   }
 
   UserReport copyWith({
     String? status,
+    String? roadId,
   }) =>
       UserReport(
         id: id,
@@ -107,6 +118,7 @@ class UserReport {
         createdAt: createdAt,
         severity: severity,
         status: status ?? this.status,
+        roadId: roadId ?? this.roadId,
       );
 }
 
@@ -214,14 +226,18 @@ class AppStateService extends ChangeNotifier {
     await _db.collection('roads').doc(roadId).set(data, SetOptions(merge: true));
   }
 
-  Future<void> submitReport(String title, String description, String floodLevel) async {
-    await _db.collection('reports').add({
+  Future<void> submitReport(String title, String description, String floodLevel, [String? roadId]) async {
+    final data = {
       'title': title,
       'description': description,
       'severity': floodLevel,
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
-    });
+    };
+    if (roadId != null) {
+      data['roadId'] = roadId;
+    }
+    await _db.collection('reports').add(data);
   }
 
   Future<void> resolveReport(String reportId) async {
@@ -234,8 +250,11 @@ class AppStateService extends ChangeNotifier {
 
   Future<void> broadcastAlert(String title, String message, String severity) async {
     String category = 'EMERGENCY';
-    if (severity == 'Advisory') category = 'WEATHER UPDATE';
-    else if (severity == 'Warning') category = 'SYSTEM';
+    if (severity == 'Advisory') {
+      category = 'WEATHER UPDATE';
+    } else if (severity == 'Warning') {
+      category = 'SYSTEM';
+    }
 
     await _db.collection('alerts').add({
       'title': title,

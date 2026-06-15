@@ -15,16 +15,18 @@ class UserHomeScreen extends StatefulWidget {
 class _UserHomeScreenState extends State<UserHomeScreen> {
   int _currentIndex = 0;
   bool _isLoading = true;
+  final GlobalKey<MapDashboardScreenState> _mapDashboardKey = GlobalKey<MapDashboardScreenState>();
 
-  final List<Widget> _screens = const [
-    MapDashboardScreen(),
-    RoutePlannerScreen(),
-    NotificationsScreen(),
-  ];
+  late final List<Widget> _screens;
 
   @override
   void initState() {
     super.initState();
+    _screens = [
+      MapDashboardScreen(key: _mapDashboardKey),
+      const RoutePlannerScreen(),
+      const NotificationsScreen(),
+    ];
     AppStateService.instance.initialize().then((_) {
       if (mounted) {
         setState(() {

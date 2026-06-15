@@ -4,6 +4,8 @@ import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
 import '../../services/app_state_service.dart';
 import 'report_submission_screen.dart';
+import '../../widgets/app_map.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 class RoadDetailsScreen extends StatelessWidget {
   final String roadId;
@@ -64,7 +66,7 @@ class RoadDetailsScreen extends StatelessWidget {
 
     // Filter reports matching this road
     final matchingReports = appState.reports
-        .where((r) => r.status != 'dismissed' && (r.title.toLowerCase().contains(road.name.toLowerCase()) || r.description.toLowerCase().contains(road.name.toLowerCase()) || (road.id == 'rizal' && r.title.toLowerCase().contains('rizal'))))
+        .where((r) => r.status != 'dismissed' && r.roadId == road.id)
         .toList();
 
     Color statusColor = AppColors.passable;
@@ -94,20 +96,36 @@ class RoadDetailsScreen extends StatelessWidget {
             child: Stack(
               children: [
                 Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Color(0xFFD4E6B5),
-                        Color(0xFFC5D8A8),
-                        Color(0xFFB8CCB0),
-                      ],
+                  child: IgnorePointer(
+                    child: AppMap(
+                      onMapCreatedCallback: (map) {
+                        if (road.geometry != null) {
+                          final coordsDyn = road.geometry!['coordinates'] as List<dynamic>?;
+                          if (coordsDyn != null && coordsDyn.isNotEmpty) {
+                            double? lon;
+                            double? lat;
+                            final first = coordsDyn.first;
+                            if (first is Map) {
+                              lon = (first['lon'] as num?)?.toDouble();
+                              lat = (first['lat'] as num?)?.toDouble();
+                            } else if (first is List && first.length >= 2) {
+                              lon = (first[0] as num?)?.toDouble();
+                              lat = (first[1] as num?)?.toDouble();
+                            }
+
+                            if (lon != null && lat != null) {
+                              map.flyTo(
+                                CameraOptions(
+                                  center: Point(coordinates: Position(lon, lat)),
+                                  zoom: 16.0,
+                                ),
+                                MapAnimationOptions(duration: 1500),
+                              );
+                            }
+                          }
+                        }
+                      },
                     ),
-                  ),
-                  child: CustomPaint(
-                    size: Size.infinite,
-                    painter: _MapBackgroundPainter(road.status),
                   ),
                 ),
                 // Safe Path Active chip
@@ -357,7 +375,7 @@ class RoadDetailsScreen extends StatelessWidget {
                                 crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
                                   Text(
-                                    road.status == 'passable' ? '98%' : '94%',
+                                    '${road.confidence ?? 95}%',
                                     style: GoogleFonts.manrope(
                                       fontSize: 32,
                                       fontWeight: FontWeight.w800,
@@ -387,7 +405,7 @@ class RoadDetailsScreen extends StatelessWidget {
                                 ),
                                 child: FractionallySizedBox(
                                   alignment: Alignment.centerLeft,
-                                  widthFactor: road.status == 'passable' ? 0.98 : 0.94,
+                                  widthFactor: (road.confidence ?? 95) / 100,
                                   child: Container(
                                     decoration: BoxDecoration(
                                       color: AppColors.secondary,
@@ -498,7 +516,7 @@ class RoadDetailsScreen extends StatelessWidget {
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => const ReportSubmissionScreen(),
+                            builder: (_) => ReportSubmissionScreen(prefilledRoadId: road.id),
                           ),
                         );
                       },
@@ -630,60 +648,5 @@ class _ReportItem extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-class _MapBackgroundPainter extends CustomPainter {
-  final String status;
-  _MapBackgroundPainter(this.status);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Grid
-    final gridPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.2)
-      ..strokeWidth = 0.5;
-
-    for (double x = 0; x < size.width; x += 25) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-    for (double y = 0; y < size.height; y += 25) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    Color roadColor = AppColors.passable;
-    if (status == 'partial') roadColor = AppColors.partial;
-    if (status == 'not_passable') roadColor = AppColors.notPassable;
-
-    // Main focus road
-    final roadPaint = Paint()
-      ..color = roadColor
-      ..strokeWidth = 8
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    // Draw main focus road
-    canvas.drawLine(
-      Offset(size.width * 0.3, 0),
-      Offset(size.width * 0.3, size.height),
-      roadPaint,
-    );
-
-    // Other background roads
-    final otherPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.5)
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawLine(
-      Offset(0, size.height * 0.6),
-      Offset(size.width, size.height * 0.6),
-      otherPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _MapBackgroundPainter oldDelegate) {
-    return oldDelegate.status != status;
   }
 }

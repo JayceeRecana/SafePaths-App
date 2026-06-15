@@ -5,7 +5,8 @@ import '../../widgets/app_top_bar.dart';
 import '../../services/app_state_service.dart';
 
 class ReportSubmissionScreen extends StatefulWidget {
-  const ReportSubmissionScreen({super.key});
+  final String? prefilledRoadId;
+  const ReportSubmissionScreen({super.key, this.prefilledRoadId});
 
   @override
   State<ReportSubmissionScreen> createState() => _ReportSubmissionScreenState();
@@ -16,6 +17,12 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
   String? _selectedRoadId;
   final _descriptionController = TextEditingController();
   bool _showSuccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedRoadId = widget.prefilledRoadId;
+  }
 
   @override
   void dispose() {
@@ -442,6 +449,7 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
       titleText,
       description,
       floodLevelText,
+      _selectedRoadId,
     );
 
     setState(() {

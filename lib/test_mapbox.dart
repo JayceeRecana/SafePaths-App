@@ -21,7 +21,7 @@ class _TestState extends State<Test> {
           RenderedQueryOptions(layerIds: null, filter: null)
         );
         for (final feature in features) {
-          final props = feature.queriedFeature.feature['properties'] as Map?;
+          final props = feature?.queriedFeature.feature['properties'] as Map?;
           if (props != null && props.containsKey('name')) {
             print(props['name']);
             break;

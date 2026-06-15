@@ -7,7 +7,7 @@ import 'broadcast_alert_screen.dart';
 import 'update_road_status_screen.dart';
 import 'user_reports_screen.dart';
 import '../../widgets/app_map.dart';
-import 'full_screen_map_screen.dart';
+import '../shared/full_screen_map_screen.dart';
 
 class AdminPanelScreen extends StatelessWidget {
   const AdminPanelScreen({super.key});
