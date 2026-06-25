@@ -2,12 +2,43 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
+class SnappyFadeTransitionsBuilder extends PageTransitionsBuilder {
+  const SnappyFadeTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    return FadeTransition(
+      opacity: CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOut,
+        reverseCurve: Curves.easeIn,
+      ),
+      child: child,
+    );
+  }
+}
+
 class AppTheme {
   static ThemeData get theme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
       scaffoldBackgroundColor: AppColors.surface,
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: SnappyFadeTransitionsBuilder(),
+          TargetPlatform.iOS: SnappyFadeTransitionsBuilder(),
+          TargetPlatform.windows: SnappyFadeTransitionsBuilder(),
+          TargetPlatform.macOS: SnappyFadeTransitionsBuilder(),
+          TargetPlatform.linux: SnappyFadeTransitionsBuilder(),
+        },
+      ),
       colorScheme: const ColorScheme.light(
         primary: AppColors.primary,
         primaryContainer: AppColors.primaryContainer,

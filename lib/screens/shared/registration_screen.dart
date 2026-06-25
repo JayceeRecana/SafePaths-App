@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../theme/app_colors.dart';
 import '../../services/user_service.dart';
 import 'login_screen.dart';
+import '../user/user_home_screen.dart';
+import '../admin/admin_home_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -18,6 +22,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _inviteCodeController = TextEditingController();
+
+  bool _isLoading = false;
 
   void _register() async {
     final name = _nameController.text.trim();
@@ -46,6 +53,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       return;
     }
 
+    if (_selectedRole == 1) {
+      final code = _inviteCodeController.text.trim();
+      if (code.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invite code is required for Barangay Officials.')),
+        );
+        return;
+      }
+    }
+
     if (!_agreedToTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please agree to the terms to continue.')),
@@ -53,17 +70,88 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       return;
     }
 
-    // Save user role and login state
-    final role = _selectedRole == 0 ? UserRole.user : UserRole.admin;
-    await UserService.saveUserRole(role);
-    await UserService.setLoggedIn(true);
+    setState(() => _isLoading = true);
 
-    if (!mounted) return;
+    try {
+      if (_selectedRole == 1) {
+        final code = _inviteCodeController.text.trim();
+        final configDoc = await FirebaseFirestore.instance.collection('config').doc('inviteCodes').get();
+        String? validCode;
+        if (configDoc.exists && configDoc.data() != null && configDoc.data()!.containsKey('barangay_official')) {
+          validCode = configDoc.data()!['barangay_official'] as String;
+        }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Registration successful.')),
-    );
-    Navigator.of(context).pop();
+        if (validCode == null) {
+          setState(() => _isLoading = false);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Unable to verify invitation code. Please try again later.')),
+          );
+          return;
+        }
+
+        if (code != validCode) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Invalid Invite Code.')),
+          );
+          return;
+        }
+      }
+
+      final userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      final user = userCredential.user;
+      if (user != null) {
+        // Save user role and metadata to Firestore
+        final roleString = _selectedRole == 0 ? 'user' : 'admin';
+        
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'name': name,
+          'email': email,
+          'role': roleString,
+          'trustScore': 50,
+          'verifiedReports': 0,
+          'dismissedReports': 0,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        final role = _selectedRole == 0 ? UserRole.user : UserRole.admin;
+        await UserService.saveUserRole(role);
+        await UserService.setLoggedIn(true);
+
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Registration successful.')),
+        );
+        if (_selectedRole == 0) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const UserHomeScreen()),
+            (route) => false,
+          );
+        } else {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
+            (route) => false,
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Registration failed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('An error occurred: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -72,6 +160,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _inviteCodeController.dispose();
     super.dispose();
   }
 
@@ -179,6 +268,22 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           ),
                         ),
                         const SizedBox(height: 24),
+
+                        // Invite Code (Conditional)
+                        if (_selectedRole == 1) ...[
+                          _FieldLabel(label: 'OFFICIAL INVITE CODE'),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _inviteCodeController,
+                            decoration: InputDecoration(
+                              hintText: 'Enter access code',
+                              prefixIcon: const Icon(Icons.key_outlined,
+                                  size: 18, color: AppColors.tertiary),
+                              fillColor: AppColors.surfaceContainerHigh,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                        ],
 
                         // Full Name
                         _FieldLabel(label: 'FULL NAME'),
@@ -391,14 +496,23 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                   borderRadius: BorderRadius.circular(16),
                                 ),
                               ),
-                              child: Text(
-                                'Register',
-                                style: GoogleFonts.manrope(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
+                              child: _isLoading
+                                  ? const SizedBox(
+                                      height: 24,
+                                      width: 24,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    )
+                                  : Text(
+                                      'Register',
+                                      style: GoogleFonts.manrope(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
                             ),
                           ),
                         ),

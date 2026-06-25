@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class PasswordRecoveryScreen extends StatefulWidget {
   const PasswordRecoveryScreen({super.key});
@@ -12,6 +13,7 @@ class PasswordRecoveryScreen extends StatefulWidget {
 
 class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
   final _emailController = TextEditingController();
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -101,14 +103,19 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: Text(
-                  'Send Recovery Link',
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
+                child: _isLoading 
+                    ? const SizedBox(
+                        height: 24, width: 24,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                      )
+                    : Text(
+                        'Send Recovery Link',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
               ),
             ),
           ],
@@ -117,16 +124,31 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
     );
   }
 
-  void _sendRecovery() {
-    if (_emailController.text.trim().isEmpty) {
+  Future<void> _sendRecovery() async {
+    if (_isLoading) return;
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter your email address.')),
       );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Recovery instructions sent.')),
-    );
-    Navigator.of(context).pop();
+
+    setState(() => _isLoading = true);
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Recovery instructions sent. Check your email.')),
+      );
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send recovery email. Please check the address.')),
+      );
+      setState(() => _isLoading = false);
+    }
   }
 }

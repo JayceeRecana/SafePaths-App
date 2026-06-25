@@ -3,9 +3,13 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
 import '../../services/app_state_service.dart';
+import 'update_road_status_screen.dart';
+import 'report_details_screen.dart';
+import '../../widgets/user_report_card.dart';
 
 class UserReportsScreen extends StatefulWidget {
-  const UserReportsScreen({super.key});
+  final bool isStandalone;
+  const UserReportsScreen({super.key, this.isStandalone = false});
 
   @override
   State<UserReportsScreen> createState() => _UserReportsScreenState();
@@ -25,6 +29,116 @@ class _UserReportsScreenState extends State<UserReportsScreen> {
     }
   }
 
+  void _showVerifyBottomSheet(BuildContext context, UserReport report) {
+    final appState = AppStateService.instance;
+    final road = appState.roads.firstWhere(
+      (r) => r.id == report.roadId, 
+      orElse: () => RoadStatus(id: '', name: 'Unknown Road', status: '', notes: '', updatedAt: DateTime.now())
+    );
+
+    String suggestedStatus = 'passable';
+    if (report.severity == 'Medium') suggestedStatus = 'partial';
+    if (report.severity == 'High') suggestedStatus = 'not_passable';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'VERIFY REPORT',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.0,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Update Map Status?',
+                style: GoogleFonts.manrope(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.onSurface,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Road: ${report.roadId != null ? road.name : "Unknown"}', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.onSurface)),
+                    const SizedBox(height: 4),
+                    Text('Reported Severity: ${report.severity}', style: GoogleFonts.inter(fontSize: 14, color: AppColors.onSurfaceVariant)),
+                    const SizedBox(height: 4),
+                    Text('Suggested Map Status: $suggestedStatus', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        side: BorderSide(color: AppColors.outlineVariant),
+                      ),
+                      child: Text('Cancel', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: AppColors.onSurface)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context); // Close bottom sheet
+                        // Navigate to UpdateRoadStatusScreen
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => UpdateRoadStatusScreen(
+                              prefilledRoadId: report.roadId,
+                              reportIdToVerify: report.id,
+                              suggestedStatus: suggestedStatus,
+                            ),
+                          ),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: Text('Proceed', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = AppStateService.instance;
@@ -32,21 +146,28 @@ class _UserReportsScreenState extends State<UserReportsScreen> {
     return Scaffold(
       appBar: AppTopBar(
         title: 'User Reports',
-        showBackButton: true,
+        showBackButton: widget.isStandalone,
         showProfile: false,
         showSettingsAction: false,
-        onBackPressed: () => Navigator.of(context).pop(),
+        onBackPressed: widget.isStandalone ? () {
+          if (Navigator.canPop(context)) Navigator.pop(context);
+        } : null,
       ),
       backgroundColor: AppColors.surface,
       body: ListenableBuilder(
         listenable: appState,
         builder: (context, _) {
-          final activeReports = appState.reports
+          var activeReports = appState.reports
               .where((r) => r.status != 'dismissed')
               .toList();
+          activeReports.sort((a, b) {
+            if (a.status == 'pending' && b.status != 'pending') return -1;
+            if (a.status != 'pending' && b.status == 'pending') return 1;
+            return appState.calculateLiveConfidence(b).compareTo(appState.calculateLiveConfidence(a));
+          });
 
           return ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             itemCount: activeReports.length + 1,
             itemBuilder: (context, index) {
               if (index == 0) {
@@ -56,9 +177,9 @@ class _UserReportsScreenState extends State<UserReportsScreen> {
                     Text(
                       'INCIDENT MANAGEMENT',
                       style: GoogleFonts.inter(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 2.0,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2.5,
                         color: AppColors.primary,
                       ),
                     ),
@@ -66,10 +187,11 @@ class _UserReportsScreenState extends State<UserReportsScreen> {
                     Text(
                       'User Reports',
                       style: GoogleFonts.manrope(
-                        fontSize: 24,
+                        fontSize: 32,
                         fontWeight: FontWeight.w800,
-                        letterSpacing: -0.4,
+                        letterSpacing: -0.8,
                         color: AppColors.onSurface,
+                        height: 1.15,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -100,143 +222,89 @@ class _UserReportsScreenState extends State<UserReportsScreen> {
                 severityColor = AppColors.secondary;
               }
 
+              int trustLevel = 3;
+              String rName = 'Anonymous';
+              String rInitials = 'AN';
+              try {
+                final userProfile = appState.users.firstWhere((u) => u.id == item.userId);
+                if (userProfile.name.isNotEmpty) {
+                  rName = userProfile.name;
+                  final nameParts = rName.split(' ');
+                  if (nameParts.length > 1) {
+                    rInitials = '${nameParts[0][0]}${nameParts[1][0]}'.toUpperCase();
+                  } else {
+                    rInitials = rName.substring(0, rName.length >= 2 ? 2 : 1).toUpperCase();
+                  }
+                }
+                if (userProfile.trustScore >= 80) {
+                  trustLevel = 5;
+                } else if (userProfile.trustScore >= 60) trustLevel = 4;
+                else if (userProfile.trustScore >= 40) trustLevel = 3;
+                else if (userProfile.trustScore >= 20) trustLevel = 2;
+                else trustLevel = 1;
+              } catch (_) {}
+
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceContainerLowest,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.15),
+                child: Dismissible(
+                  key: Key(item.id),
+                  direction: isPending ? DismissDirection.horizontal : DismissDirection.none,
+                  background: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(16),
                     ),
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: const Icon(Icons.check_circle_outline, color: Colors.white, size: 32),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: severityColor,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              item.title,
-                              style: GoogleFonts.manrope(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.onSurface,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            _getTimeAgo(item.createdAt),
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        item.description,
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          color: AppColors.onSurfaceVariant,
-                          height: 1.45,
+                  secondaryBackground: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.error,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: const Icon(Icons.delete_outline, color: Colors.white, size: 32),
+                  ),
+                  confirmDismiss: (direction) async {
+                    if (direction == DismissDirection.endToStart) {
+                      appState.dismissReport(item.id);
+                      return true;
+                    } else if (direction == DismissDirection.startToEnd) {
+                      _showVerifyBottomSheet(context, item);
+                      return false;
+                    }
+                    return false;
+                  },
+                  child: UserReportCard(
+                    icon: Icons.info_outline,
+                    iconColor: severityColor,
+                    title: item.title,
+                    time: _getTimeAgo(item.createdAt),
+                    description: item.description,
+                    showActions: isPending,
+                    isVerified: isVerified,
+                    confidence: isPending ? appState.calculateLiveConfidence(item) : null,
+                    trustLevel: trustLevel,
+                    reporterName: rName,
+                    reporterInitials: rInitials,
+                    onVerify: () => _showVerifyBottomSheet(context, item),
+                    onDismiss: () => appState.dismissReport(item.id),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ReportDetailsScreen(report: item),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (isPending)
-                        Row(
-                          children: [
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () {
-                                  appState.resolveReport(item.id);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Report verified.')),
-                                  );
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.secondary,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      'Verify',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () {
-                                  appState.dismissReport(item.id);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Report dismissed.')),
-                                  );
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.surfaceContainerHighest,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      'Dismiss',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.onSurface,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      if (isVerified)
-                        Row(
-                          children: [
-                            Icon(Icons.done_all, size: 16, color: AppColors.secondary),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Verified by Admin',
-                              style: GoogleFonts.inter(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.secondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
+                      );
+                    },
                   ),
                 ),
               );
             },
-          );
-        },
+        );
+       },
       ),
     );
   }

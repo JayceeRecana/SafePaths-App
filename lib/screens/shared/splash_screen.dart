@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
+import '../../main.dart';
 import 'login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -42,6 +43,18 @@ class _SplashScreenState extends State<SplashScreen>
 
     Timer(const Duration(milliseconds: 3500), () {
       if (mounted) {
+        if (firebaseInitFailed) {
+          // Show error
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => AlertDialog(
+              title: const Text('Connection Error'),
+              content: const Text('Failed to connect to the server. Please check your internet connection and restart the app.'),
+            )
+          );
+          return;
+        }
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
             pageBuilder: (context, animation, secondaryAnimation) =>

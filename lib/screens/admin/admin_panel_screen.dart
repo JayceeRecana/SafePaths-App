@@ -3,12 +3,19 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
 import '../../services/app_state_service.dart';
+import '../../services/weather_service.dart';
 import 'broadcast_alert_screen.dart';
 import 'update_road_status_screen.dart';
+import 'report_details_screen.dart';
 import 'user_reports_screen.dart';
 import '../../widgets/app_map.dart';
 import '../shared/full_screen_map_screen.dart';
-
+import 'weather_simulator_screen.dart';
+import 'consensus_audit_screen.dart';
+import 'import_roads_screen.dart';
+import '../../widgets/user_report_card.dart';
+import '../../services/routing_service.dart';
+import 'package:intl/intl.dart';
 class AdminPanelScreen extends StatelessWidget {
   const AdminPanelScreen({super.key});
 
@@ -25,24 +32,356 @@ class AdminPanelScreen extends StatelessWidget {
     }
   }
 
+  void _showVerifyBottomSheet(BuildContext context, UserReport report) {
+    final appState = AppStateService.instance;
+    final road = appState.roads.firstWhere(
+      (r) => r.id == report.roadId, 
+      orElse: () => RoadStatus(id: '', name: 'Unknown Road', status: '', notes: '', updatedAt: DateTime.now())
+    );
+
+    String suggestedStatus = 'passable';
+    if (report.severity == 'Medium') suggestedStatus = 'partial';
+    if (report.severity == 'High') suggestedStatus = 'not_passable';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'VERIFY REPORT',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.0,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Update Map Status?',
+                style: GoogleFonts.manrope(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.onSurface,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Road: ${report.roadId != null ? road.name : "Unknown"}', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.onSurface)),
+                    const SizedBox(height: 4),
+                    Text('Reported Severity: ${report.severity}', style: GoogleFonts.inter(fontSize: 14, color: AppColors.onSurfaceVariant)),
+                    const SizedBox(height: 4),
+                    Text('Suggested Map Status: $suggestedStatus', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        side: BorderSide(color: AppColors.outlineVariant),
+                      ),
+                      child: Text('Cancel', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: AppColors.onSurface)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context); // Close bottom sheet
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => UpdateRoadStatusScreen(
+                              prefilledRoadId: report.roadId,
+                              reportIdToVerify: report.id,
+                              suggestedStatus: suggestedStatus,
+                            ),
+                          ),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: Text('Proceed', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showConfirmSafeDialog(BuildContext context, AppStateService appState) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return ListenableBuilder(
+          listenable: appState,
+          builder: (context, _) {
+            final passableRoads = appState.roads.where((r) => r.status == 'passable').toList();
+            passableRoads.sort((a, b) {
+              final aStale = (DateTime.now().difference(a.updatedAt).inMinutes / 60.0) > 1.0;
+              final bStale = (DateTime.now().difference(b.updatedAt).inMinutes / 60.0) > 1.0;
+              if (aStale && !bStale) return -1;
+              if (!aStale && bStale) return 1;
+              return a.name.compareTo(b.name);
+            });
+            
+            final staleRoads = passableRoads.where((r) => (DateTime.now().difference(r.updatedAt).inMinutes / 60.0) > 1.0).toList();
+
+            return DraggableScrollableSheet(
+              initialChildSize: 0.6,
+              minChildSize: 0.4,
+              maxChildSize: 0.9,
+              expand: false,
+              builder: (context, scrollController) {
+                if (passableRoads.isEmpty) {
+                  return Center(
+                    child: Text(
+                      'No passable roads to confirm.',
+                      style: GoogleFonts.inter(color: AppColors.onSurfaceVariant),
+                    ),
+                  );
+                }
+
+                return ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.all(24.0),
+                  children: [
+                    Text(
+                      'CONFIRM SAFE',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2.0,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Re-verify Passable Roads',
+                      style: GoogleFonts.manrope(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'This resets the Predictive Risk timer so roads stay green during storms.',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    
+                    if (staleRoads.isNotEmpty) ...[
+                      FilledButton.icon(
+                        onPressed: () async {
+                          for (var road in staleRoads) {
+                            await appState.updateRoadStatus(road.id, road.status, road.notes);
+                          }
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('${staleRoads.length} roads confirmed safe.')),
+                            );
+                          }
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                        icon: const Icon(Icons.verified, size: 20),
+                        label: Text(
+                          'Verify All ${staleRoads.length} Stale Roads',
+                          style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+
+                    ...passableRoads.map((road) {
+                      final hoursOld = DateTime.now().difference(road.updatedAt).inMinutes / 60.0;
+                      final isStale = hoursOld > 1.0;
+
+                      return Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: isStale ? Colors.orange.withValues(alpha: 0.1) : AppColors.secondary.withValues(alpha: 0.1),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    isStale ? Icons.warning_amber_rounded : Icons.check_circle,
+                                    size: 20,
+                                    color: isStale ? Colors.orange : AppColors.secondary,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        road.name,
+                                        style: GoogleFonts.inter(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.onSurface,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        isStale ? 'Requires re-verification' : 'Recently verified',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 12,
+                                          color: AppColors.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (isStale)
+                                  TextButton(
+                                    onPressed: () async {
+                                      await appState.updateRoadStatus(road.id, road.status, road.notes);
+                                    },
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: AppColors.primary,
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+                                    ),
+                                    child: Text('Verify', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                                  )
+                                else
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.surfaceContainerHigh,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text(
+                                      'FRESH',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 1.0,
+                                        color: AppColors.secondary,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const Divider(height: 1, color: AppColors.outlineVariant),
+                        ],
+                      );
+                    }),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = AppStateService.instance;
+    final routing = RoutingService.instance;
 
     return ListenableBuilder(
-      listenable: appState,
+      listenable: Listenable.merge([appState, routing]),
       builder: (context, _) {
-        final floodedCount = appState.roads.where((r) => r.status == 'not_passable').length;
+        final weatherState = SimulatedWeatherService.instance.currentState;
+        final floodedCount = appState.roads.where((r) => r.getEffectiveStatus(weatherState) == 'not_passable').length;
         final activeCount = appState.reports.where((r) => r.status == 'pending').length;
         final resolvedCount = appState.reports.where((r) => r.status == 'verified').length;
 
-        final displayReports = appState.reports.where((r) => r.status != 'dismissed').take(3).toList();
+        var activeReports = appState.reports.where((r) => r.status != 'dismissed').toList();
+        activeReports.sort((a, b) {
+          if (a.status == 'pending' && b.status != 'pending') return -1;
+          if (a.status != 'pending' && b.status == 'pending') return 1;
+          return appState.calculateLiveConfidence(b).compareTo(appState.calculateLiveConfidence(a));
+        });
+        final displayReports = activeReports.take(3).toList();
 
         return Scaffold(
-          appBar: const AppTopBar(),
+          appBar: AppTopBar(
+            actions: [
+              GestureDetector(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const WeatherSimulatorScreen()),
+                  );
+                },
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    color: AppColors.primaryContainer.withValues(alpha: 0.5),
+                  ),
+                  child: const Icon(
+                    Icons.science,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+          ),
           backgroundColor: AppColors.surface,
           body: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 120),
+            primary: false,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -50,60 +389,175 @@ class AdminPanelScreen extends StatelessWidget {
                 Text(
                   'COMMAND CENTER',
                   style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 2.0,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2.5,
                     color: AppColors.primary,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Text(
                   'Barangay Central\nDashboard',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.manrope(
-                    fontSize: 28,
+                    fontSize: 32,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: -0.5,
+                    letterSpacing: -0.8,
                     color: AppColors.onSurface,
-                    height: 1.2,
+                    height: 1.15,
                   ),
                 ),
                 const SizedBox(height: 20),
 
-                // Action buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: _ActionButton(
-                        icon: Icons.edit_road,
-                        label: 'Update Road\nStatus',
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const UpdateRoadStatusScreen(),
+                // Global Search Shortcut
+                Semantics(
+                  label: 'Search roads, reports, or incidents',
+                  button: true,
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.of(context).push(
+                        PageRouteBuilder(
+                          pageBuilder: (context, animation, secondaryAnimation) => const UpdateRoadStatusScreen(isStandalone: true, autoFocusSearch: true),
+                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                            return FadeTransition(opacity: animation, child: child);
+                          },
+                          transitionDuration: const Duration(milliseconds: 200),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppColors.outlineVariant.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.search, color: AppColors.onSurfaceVariant, size: 20),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Search roads, reports, or incidents...',
+                            style: GoogleFonts.inter(
+                              color: AppColors.onSurfaceVariant.withValues(alpha: 0.8),
+                              fontSize: 15,
                             ),
-                          );
-                        },
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _ActionButton(
-                        icon: Icons.campaign,
-                        label: 'Broadcast\nAlert',
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const BroadcastAlertScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
                 const SizedBox(height: 20),
+
+
+                // System Overview Card (Analytics + Health)
+                Builder(
+                  builder: (context) {
+                    final totalRoads = appState.roads.length;
+                    final passable = appState.roads.where((r) => r.status == 'passable').length;
+                    final partial = appState.roads.where((r) => r.status == 'partial').length;
+                    final notPassable = appState.roads.where((r) => r.status == 'not_passable').length;
+
+                    return Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: AppColors.outlineVariant.withValues(alpha: 0.2),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.analytics, color: AppColors.primary, size: 20),
+                              const SizedBox(width: 8),
+                              Text(
+                                'SYSTEM OVERVIEW',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1.5,
+                                  color: AppColors.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Road Network Status',
+                            style: GoogleFonts.manrope(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          
+                          // Horizontal Stacked Bar
+                          if (totalRoads > 0)
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: SizedBox(
+                                height: 16,
+                                child: Row(
+                                  children: [
+                                    if (passable > 0) Expanded(flex: passable, child: Container(color: AppColors.secondary)),
+                                    if (partial > 0) Expanded(flex: partial, child: Container(color: AppColors.partial)),
+                                    if (notPassable > 0) Expanded(flex: notPassable, child: Container(color: AppColors.notPassable)),
+                                  ],
+                                ),
+                              ),
+                            )
+                          else
+                            Container(
+                              height: 16,
+                              decoration: BoxDecoration(
+                                color: AppColors.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                          
+                          // Legend
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _buildChartLegend('Passable', passable, AppColors.secondary),
+                              _buildChartLegend('Partial', partial, AppColors.partial),
+                              _buildChartLegend('Impassable', notPassable, AppColors.notPassable),
+                            ],
+                          ),
+                          
+                          const SizedBox(height: 24),
+                          const Divider(height: 1, color: Colors.black12),
+                          const SizedBox(height: 24),
+
+                          // Swipeable System Health
+                          _SystemHealthDashboard(
+                            appState: appState,
+                            routing: routing,
+                            weatherState: weatherState,
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                ),
+                const SizedBox(height: 24),
 
                 // Stats grid
                 GridView.count(
@@ -136,173 +590,179 @@ class AdminPanelScreen extends StatelessWidget {
                       icon: Icons.groups,
                       iconColor: AppColors.onSurfaceVariant,
                       label: 'Volunteers Active',
-                      value: '8',
+                      value: appState.users.length.toString(),
                     ),
                   ],
                 ),
                 const SizedBox(height: 24),
 
-                // Interactive route monitor
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Interactive Route Monitor',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.manrope(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.onSurface,
+                // Quick Actions Card
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: AppColors.outlineVariant.withValues(alpha: 0.2),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.flash_on, color: AppColors.primary, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'QUICK ACTIONS',
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.5,
+                              color: AppColors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Action buttons
+                      IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: _ActionButton(
+                                icon: Icons.edit_road,
+                                label: 'Update Road',
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    PageRouteBuilder(
+                                      pageBuilder: (context, animation, secondaryAnimation) => const UpdateRoadStatusScreen(isStandalone: true),
+                                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                        return FadeTransition(opacity: animation, child: child);
+                                      },
+                                      transitionDuration: const Duration(milliseconds: 200),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _ActionButton(
+                                icon: Icons.campaign,
+                                label: 'Broadcast',
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    PageRouteBuilder(
+                                      pageBuilder: (context, animation, secondaryAnimation) => const BroadcastAlertScreen(isStandalone: true),
+                                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                        return FadeTransition(opacity: animation, child: child);
+                                      },
+                                      transitionDuration: const Duration(milliseconds: 200),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _ActionButton(
+                                icon: Icons.verified_user,
+                                label: 'Confirm Safe',
+                                onTap: () {
+                                  _showConfirmSafeDialog(context, appState);
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _ActionButton(
+                                icon: Icons.receipt_long,
+                                label: 'Audit Trail',
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    PageRouteBuilder(
+                                      pageBuilder: (context, animation, secondaryAnimation) => const ConsensusAuditScreen(),
+                                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                        return FadeTransition(opacity: animation, child: child);
+                                      },
+                                      transitionDuration: const Duration(milliseconds: 200),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: AppColors.secondaryContainer,
-                        borderRadius: BorderRadius.circular(100),
-                      ),
-                      child: Text(
-                        'LIVE MAP',
+                      const SizedBox(height: 24),
+                      const Divider(height: 1, color: Colors.black12),
+                      const SizedBox(height: 24),
+                      
+                      Text(
+                        'ROAD MANAGEMENT',
                         style: GoogleFonts.inter(
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.onSecondaryContainer,
+                          letterSpacing: 1.5,
+                          color: AppColors.onSurfaceVariant,
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Map area
-                GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const FullScreenMapScreen(),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    height: 300,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
-                      color: AppColors.surfaceContainer,
-                      border: Border.all(
-                        color: AppColors.outlineVariant.withValues(alpha: 0.2),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 0,
+                          ),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const ImportRoadsScreen()),
+                            );
+                          },
+                          icon: const Icon(Icons.download),
+                          label: Text('Bulk Import Roads (OSM)', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
                         ),
-                      ],
-                    ),
-                    child: Stack(
-                      children: [
-                        // Map illustration
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(24),
-                          child: const AppMap(),
-                        ),
-
-                        // Floating Full Screen Button
-                        Positioned(
-                          top: 16,
-                          right: 16,
-                          child: GestureDetector(
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const FullScreenMapScreen(),
-                                ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.surfaceContainerLow,
+                            foregroundColor: AppColors.onSurfaceVariant,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: 0,
+                          ),
+                          onPressed: () async {
+                            await AppStateService.instance.buildAndVerifyRoadGraph();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Graph generated! Check debug console.')),
                               );
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.95),
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.15),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                                border: Border.all(
-                                  color: AppColors.outlineVariant.withValues(alpha: 0.15),
-                                ),
-                              ),
-                              child: const Icon(
-                                Icons.fullscreen_rounded,
-                                color: AppColors.primary,
-                                size: 24,
-                              ),
-                            ),
-                          ),
-                        ),
-
-                      // Legend
-                      Positioned(
-                        bottom: 16,
-                        right: 16,
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: AppColors.surface.withValues(alpha: 0.8),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.08),
-                                blurRadius: 16,
-                              ),
-                            ],
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.2),
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'MAP LEGEND',
-                                style: GoogleFonts.inter(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 1.5,
-                                  color: AppColors.onSurfaceVariant,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              _LegendRow(
-                                  color: AppColors.tertiary,
-                                  label: 'Flooded / Blocked'),
-                              const SizedBox(height: 8),
-                              _LegendRow(
-                                  color: AppColors.primary,
-                                  label: 'Clear / Open'),
-                              const SizedBox(height: 8),
-                              _LegendRow(
-                                  color: AppColors.secondaryFixedDim,
-                                  label: 'Verified Safe Path'),
-                            ],
-                          ),
+                            }
+                          },
+                          icon: const Icon(Icons.hub),
+                          label: Text('Developer: Build Road Graph', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
-
                 const SizedBox(height: 24),
-
                 // User reports section
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -380,9 +840,31 @@ class AdminPanelScreen extends StatelessWidget {
                       iconColor = AppColors.secondary;
                     }
 
+                    int trustLevel = 3;
+                    String rName = 'Anonymous';
+                    String rInitials = 'AN';
+                    try {
+                      final userProfile = appState.users.firstWhere((u) => u.id == report.userId);
+                      if (userProfile.name.isNotEmpty) {
+                        rName = userProfile.name;
+                        final nameParts = rName.split(' ');
+                        if (nameParts.length > 1) {
+                          rInitials = '${nameParts[0][0]}${nameParts[1][0]}'.toUpperCase();
+                        } else {
+                          rInitials = rName.substring(0, rName.length >= 2 ? 2 : 1).toUpperCase();
+                        }
+                      }
+                      if (userProfile.trustScore >= 80) {
+                        trustLevel = 5;
+                      } else if (userProfile.trustScore >= 60) trustLevel = 4;
+                      else if (userProfile.trustScore >= 40) trustLevel = 3;
+                      else if (userProfile.trustScore >= 20) trustLevel = 2;
+                      else trustLevel = 1;
+                    } catch (_) {}
+
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: _UserReportCard(
+                      child: UserReportCard(
                         icon: icon,
                         iconColor: iconColor,
                         title: report.title,
@@ -390,8 +872,138 @@ class AdminPanelScreen extends StatelessWidget {
                         description: report.description,
                         showActions: isPending,
                         isVerified: isVerified,
-                        onVerify: () => appState.resolveReport(report.id),
+                        confidence: isPending ? appState.calculateLiveConfidence(report) : null,
+                        trustLevel: trustLevel,
+                        reporterName: rName,
+                        reporterInitials: rInitials,
+                        onVerify: () => _showVerifyBottomSheet(context, report),
                         onDismiss: () => appState.dismissReport(report.id),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ReportDetailsScreen(report: report),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  }),
+
+                const SizedBox(height: 24),
+                
+                // System Activity Log
+                Text(
+                  'System Activity Log',
+                  style: GoogleFonts.manrope(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (appState.systemLogs.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceContainerLowest,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: AppColors.outlineVariant.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'No automated actions yet',
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: AppColors.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  ...appState.systemLogs.take(5).map((log) {
+                    final isEscalation = log.action == 'Auto-Escalation';
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isEscalation ? AppColors.tertiary.withValues(alpha: 0.1) : AppColors.surfaceContainerHighest.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isEscalation ? AppColors.tertiary.withValues(alpha: 0.5) : AppColors.primary.withValues(alpha: 0.3),
+                          width: isEscalation ? 2.0 : 1.0,
+                        ),
+                        boxShadow: isEscalation ? [
+                          BoxShadow(color: AppColors.tertiary.withValues(alpha: 0.2), blurRadius: 12, spreadRadius: 2)
+                        ] : [],
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: isEscalation ? AppColors.tertiary : AppColors.primary.withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              isEscalation ? Icons.auto_awesome : Icons.smart_toy, 
+                              size: isEscalation ? 24 : 20, 
+                              color: isEscalation ? Colors.white : AppColors.primary
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      log.action.toUpperCase(),
+                                      style: GoogleFonts.inter(
+                                        fontSize: isEscalation ? 14 : 13,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 1.0,
+                                        color: isEscalation ? AppColors.tertiary : AppColors.primary,
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: isEscalation ? AppColors.tertiary.withValues(alpha: 0.2) : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        _getTimeAgo(log.timestamp),
+                                        style: GoogleFonts.inter(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: isEscalation ? AppColors.tertiary : AppColors.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  log.details,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 14,
+                                    fontWeight: isEscalation ? FontWeight.w600 : FontWeight.w400,
+                                    color: AppColors.onSurface,
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     );
                   }),
@@ -424,21 +1036,27 @@ class _ActionButtonState extends State<_ActionButton> {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: widget.onTap,
+    return Semantics(
+      label: widget.label,
+      button: true,
+      child: InkWell(
+        onTap: widget.onTap,
       onHover: (val) => setState(() => _isHovered = val),
       onHighlightChanged: (val) => setState(() => _isHovered = val),
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
         decoration: BoxDecoration(
           gradient: _isHovered
               ? const LinearGradient(
                   colors: [AppColors.primary, AppColors.primaryContainer],
                 )
               : null,
-          color: _isHovered ? null : AppColors.surfaceContainerHighest,
+          color: _isHovered ? null : AppColors.surfaceContainerLow,
+          border: Border.all(
+            color: _isHovered ? Colors.transparent : AppColors.outlineVariant.withValues(alpha: 0.3),
+          ),
           borderRadius: BorderRadius.circular(12),
           boxShadow: _isHovered
               ? [
@@ -450,25 +1068,36 @@ class _ActionButtonState extends State<_ActionButton> {
                 ]
               : null,
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.start,
           children: [
-            Icon(
-              widget.icon,
-              size: 20,
-              color: _isHovered ? Colors.white : AppColors.onSurface,
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _isHovered ? Colors.white.withValues(alpha: 0.2) : AppColors.primary.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                widget.icon,
+                size: 22,
+                color: _isHovered ? Colors.white : AppColors.primary,
+              ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                widget.label,
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: _isHovered ? Colors.white : AppColors.onSurface,
-                ),
+            const SizedBox(height: 12),
+            Text(
+              widget.label,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: _isHovered ? Colors.white : AppColors.onSurface,
+                height: 1.2,
+                letterSpacing: -0.2,
               ),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -570,237 +1199,265 @@ class _LegendRow extends StatelessWidget {
   }
 }
 
-class _UserReportCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String time;
-  final String description;
-  final bool showActions;
-  final bool isVerified;
-  final VoidCallback? onVerify;
-  final VoidCallback? onDismiss;
 
-  const _UserReportCard({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.time,
-    required this.description,
-    required this.showActions,
-    this.isVerified = false,
-    this.onVerify,
-    this.onDismiss,
+Widget _buildChartLegend(String label, int count, Color color) {
+  return Row(
+    children: [
+      Container(
+        width: 12,
+        height: 12,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+        ),
+      ),
+      const SizedBox(width: 6),
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          Text(
+            count.toString(),
+            style: GoogleFonts.manrope(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: AppColors.onSurface,
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+class _SystemHealthDashboard extends StatefulWidget {
+  final AppStateService appState;
+  final RoutingService routing;
+  final WeatherState weatherState;
+
+  const _SystemHealthDashboard({
+    required this.appState,
+    required this.routing,
+    required this.weatherState,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.outlineVariant.withValues(alpha: 0.05),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Icon(icon, size: 20, color: iconColor),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.onSurface,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                time,
-                style: GoogleFonts.inter(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            description,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              color: AppColors.onSurfaceVariant,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (showActions)
-            Row(
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () {
-                      if (onVerify != null) onVerify!();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Report verified and marked resolved.'),
-                        ),
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      decoration: BoxDecoration(
-                        color: AppColors.secondary,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text(
-                          'Verify & Clear',
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () {
-                      if (onDismiss != null) onDismiss!();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Report dismissed.')),
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text(
-                          'Dismiss',
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.onSurface,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          if (isVerified)
-            Row(
-              children: [
-                Icon(Icons.done_all, size: 16, color: AppColors.secondary),
-                const SizedBox(width: 4),
-                Text(
-                  'Verified by Admin',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.secondary,
-                  ),
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
+  State<_SystemHealthDashboard> createState() => _SystemHealthDashboardState();
 }
 
-class _AdminMapPainter extends CustomPainter {
-  final List<RoadStatus> roads;
-  _AdminMapPainter(this.roads);
+class _SystemHealthDashboardState extends State<_SystemHealthDashboard> {
+  final PageController _pageController = PageController();
+  int _currentPage = 0;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    // Grid background
-    final gridPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.3)
-      ..strokeWidth = 0.5;
-
-    for (double x = 0; x < size.width; x += 30) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-    for (double y = 0; y < size.height; y += 30) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    Color getColor(String roadId, Color defaultColor) {
-      final road = roads.firstWhere(
-        (r) => r.id == roadId,
-        orElse: () => RoadStatus(id: '', name: '', status: '', notes: '', updatedAt: DateTime.now()),
-      );
-      if (road.status == 'passable') return AppColors.secondaryFixedDim;
-      if (road.status == 'partial') return AppColors.partial;
-      if (road.status == 'not_passable') return AppColors.tertiary;
-      return defaultColor;
-    }
-
-    // Flooded / Blocked road (represented by pio_valenzuela road status)
-    final pioColor = getColor('pio_valenzuela', AppColors.tertiary);
-    final redPaint = Paint()
-      ..color = pioColor
-      ..strokeWidth = 6
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(
-      Offset(size.width * 0.2, size.height * 0.33),
-      Offset(size.width * 0.5, size.height * 0.33),
-      redPaint,
-    );
-
-    // Clear road (represented by sampaguita)
-    final sampaguitaColor = getColor('sampaguita', AppColors.primary);
-    final bluePaint = Paint()
-      ..color = sampaguitaColor
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(
-      Offset(size.width * 0.4, size.height * 0.5),
-      Offset(size.width * 0.7, size.height * 0.5),
-      bluePaint,
-    );
-
-    // Safe path (represented by ems_barrio)
-    final emsColor = getColor('ems_barrio', AppColors.secondaryFixedDim);
-    final greenPaint = Paint()
-      ..color = emsColor
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(
-      Offset(size.width * 0.3, size.height * 0.7),
-      Offset(size.width * 0.6, size.height * 0.7),
-      greenPaint,
-    );
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
   @override
-  bool shouldRepaint(covariant _AdminMapPainter oldDelegate) {
-    return oldDelegate.roads != roads;
+  Widget build(BuildContext context) {
+    // 1. Graph Statistics
+    final totalRoads = widget.appState.roads.length;
+    final disconnectedRoads = widget.appState.roads.where((r) => r.neighbors.isEmpty).length;
+    final connectedRoads = totalRoads - disconnectedRoads;
+    final totalConnections = widget.appState.roads.fold<int>(0, (sum, r) => sum + r.neighbors.length);
+    final avgNeighbors = totalRoads > 0 ? (totalConnections / totalRoads) : 0.0;
+
+    // 2. Risk Engine
+    final engineMs = widget.appState.lastRiskEngineExecutionMs;
+    String engineStatus = 'Healthy';
+    Color engineColor = AppColors.secondary;
+    if (engineMs > 300) {
+      engineStatus = 'Slow';
+      engineColor = AppColors.tertiary;
+    } else if (engineMs >= 100) {
+      engineStatus = 'Moderate';
+      engineColor = Colors.orange;
+    }
+    
+    final String lastUpdateStr = widget.appState.lastRiskEngineRun != null 
+        ? DateFormat('h:mm:ss a').format(widget.appState.lastRiskEngineRun!) 
+        : 'Never';
+
+    // 3. Weather
+    String weatherName = widget.weatherState.name;
+    double propMult = 0.0;
+    switch (widget.weatherState) {
+      case WeatherState.clear: propMult = 0.0; break;
+      case WeatherState.lightRain: propMult = 0.2; break;
+      case WeatherState.moderateRain: propMult = 0.4; break;
+      case WeatherState.heavyRain: propMult = 0.7; break;
+      case WeatherState.typhoon: propMult = 1.0; break;
+    }
+
+    // 4. Risks
+    final critical = widget.appState.roads.where((r) => r.riskCategory == 'Critical').length;
+    final warning = widget.appState.roads.where((r) => r.riskCategory == 'Warning').length;
+    final watch = widget.appState.roads.where((r) => r.riskCategory == 'Watch').length;
+
+    // 5. System Health
+    bool isOperational = true;
+    if (engineMs > 300 || disconnectedRoads > (totalRoads * 0.2) || totalRoads == 0) {
+       isOperational = false;
+    }
+
+    final pages = [
+      _buildDashboardSection('ROAD NETWORK', [
+        'Roads: $totalRoads',
+        'Connected: $connectedRoads',
+        'Disconnected: $disconnectedRoads',
+        'Avg Neighbors: ${avgNeighbors.toStringAsFixed(1)}',
+      ]),
+      _buildDashboardSection('RISK ENGINE', [
+        'Execution: ${engineMs} ms',
+        'Last Update: $lastUpdateStr',
+        'Status: $engineStatus',
+      ], statusColor: engineColor),
+      _buildDashboardSection('CURRENT CONDITIONS', [
+        'Weather: ${weatherName.toUpperCase()}',
+        'Propagation: ×$propMult',
+      ]),
+      _buildDashboardSection('ACTIVE RISKS', [
+        'Critical: $critical',
+        'Warning: $warning',
+        'Watch: $watch',
+      ]),
+      _buildDashboardSection('ALERTS & ANALYTICS', [
+        'Active Alerts: ${widget.appState.alerts.where((a) => a.isActive).length}',
+        'Routes Protected: ${widget.routing.routesProtectedCount}',
+        'Avg Risk Reduction: ${widget.routing.averageRiskReduction.toStringAsFixed(0)}%',
+      ]),
+      _buildDashboardSection('PREDICTION MODEL', [
+        'Accuracy: Not Enough Data',
+        'Lead Time: Pending Validation',
+      ]),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'SYSTEM HEALTH',
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2.0,
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: isOperational ? AppColors.secondary.withValues(alpha: 0.2) : AppColors.tertiary.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(100),
+              ),
+              child: Text(
+                isOperational ? 'OPERATIONAL' : 'DEGRADED',
+                style: GoogleFonts.inter(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                  color: isOperational ? AppColors.secondary : AppColors.tertiary,
+                ),
+              ),
+            )
+          ],
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 140, // Increased height to prevent bottom overflow
+          child: PageView.builder(
+            controller: _pageController,
+            onPageChanged: (index) {
+              setState(() {
+                _currentPage = index;
+              });
+            },
+            itemCount: pages.length,
+            itemBuilder: (context, index) {
+              return Padding(
+                padding: const EdgeInsets.only(right: 8.0), // give slight breathing room
+                child: pages[index],
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(pages.length, (index) {
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              height: 6,
+              width: _currentPage == index ? 16 : 6,
+              decoration: BoxDecoration(
+                color: _currentPage == index ? AppColors.primary : AppColors.outlineVariant.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDashboardSection(String title, List<String> lines, {Color? statusColor}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.5,
+            color: AppColors.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ...lines.map((line) {
+          final parts = line.split(': ');
+          final label = parts[0];
+          final val = parts.length > 1 ? parts[1] : '';
+          
+          Color valColor = AppColors.onSurface;
+          if (label == 'Status' && statusColor != null) {
+             valColor = statusColor;
+          } else if (label == 'Accuracy' || label == 'Lead Time') {
+             valColor = AppColors.onSurfaceVariant; // dimmer for pending
+          }
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(label, style: GoogleFonts.inter(fontSize: 14, color: AppColors.onSurfaceVariant)),
+                Text(
+                  val,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: valColor,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
   }
 }

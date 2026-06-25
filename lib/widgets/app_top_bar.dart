@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_colors.dart';
@@ -29,30 +30,22 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC).withValues(alpha: 0.7),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: AppBar(
+          backgroundColor: const Color(0xFFF8FAFC).withValues(alpha: 0.7),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          automaticallyImplyLeading: false,
+          titleSpacing: 16,
+          title: Row(
             children: [
-              // Only show the back button when there is actually a route to go back to.
-              // Screens used as tabs in an IndexedStack have showBackButton: true but
-              // Navigator.canPop() is false — showing the button there would let users
-              // pop the root route and land on a black screen.
-              if (showBackButton && Navigator.of(context).canPop())
+              if (showBackButton)
                 GestureDetector(
-                  onTap: onBackPressed ?? () => Navigator.of(context).pop(),
+                  onTap: onBackPressed ?? () {
+                    if (Navigator.canPop(context)) Navigator.pop(context);
+                  },
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
@@ -66,7 +59,6 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
                   ),
                 ),
               
-              // 2. Wrap the Profile Icon in a GestureDetector for navigation
               if (showProfile && !showBackButton)
                 GestureDetector(
                   onTap: () {
@@ -99,7 +91,7 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  title ?? 'SafePaths', // Updated default title to match project
+                  title ?? 'SafePaths',
                   style: GoogleFonts.manrope(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -109,39 +101,45 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (actions != null)
-                ...actions!
-              else if (!showSettingsAction)
-                const SizedBox(width: 40, height: 40)
-              else
-                GestureDetector(
-                  onTap: () {
-                    if (onSettingsPressed != null) {
-                      onSettingsPressed!();
-                      return;
-                    }
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const SettingsScreen(),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Icon(
-                      Icons.settings_outlined,
-                      color: Colors.grey.shade500,
-                      size: 24,
-                    ),
-                  ),
-                ),
             ],
           ),
+          actions: [
+            ...?actions,
+            if (!showSettingsAction)
+              const SizedBox(width: 16)
+            else
+              Semantics(
+                label: 'Settings',
+                button: true,
+                child: GestureDetector(
+                  onTap: () {
+                  if (onSettingsPressed != null) {
+                    onSettingsPressed!();
+                    return;
+                  }
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const SettingsScreen(),
+                    ),
+                  );
+                },
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  margin: const EdgeInsets.only(right: 16),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Icon(
+                    Icons.settings_outlined,
+                    color: Colors.grey.shade500,
+                    size: 24,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

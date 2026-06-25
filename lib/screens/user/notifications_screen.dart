@@ -117,7 +117,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   )
                 else
                   ...appState.alerts.asMap().entries.map((entry) {
-                    final index = entry.key;
                     final item = entry.value;
 
                     IconData icon = Icons.warning_rounded;
@@ -142,8 +141,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         title: item.title,
                         description: item.message,
                         onDismiss: () {
-                          appState.removeAlert(index);
+                          appState.removeAlert(item.id);
                         },
+                        id: item.id,
                       ),
                     );
                   }),
@@ -166,6 +166,7 @@ class _NotificationCard extends StatelessWidget {
   final String title;
   final String description;
   final VoidCallback onDismiss;
+  final String id;
 
   const _NotificationCard({
     required this.icon,
@@ -177,12 +178,13 @@ class _NotificationCard extends StatelessWidget {
     required this.title,
     required this.description,
     required this.onDismiss,
+    required this.id,
   });
 
   @override
   Widget build(BuildContext context) {
     return Dismissible(
-      key: ValueKey('$title-$time'),
+      key: ValueKey(id),
       direction: DismissDirection.endToStart,
       onDismissed: (_) => onDismiss(),
       background: Container(

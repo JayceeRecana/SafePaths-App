@@ -22,7 +22,13 @@ class PlannedRoute {
   final double distanceMiles;
   final String summary;
   final List<String> avoidedRoads;
-  final String safetyStatus; // 'safe', 'partial', 'not_passable'
+  final List<String> routeExplanations;
+  final String safetyStatus; // 'safe', 'partial', 'not_passable', 'critical'
+  final int safetyScore;
+  final double routeCost;
+  final double totalRisk;
+  final int? riskReductionPercentage;
+  final int? timePenaltyMin;
   final List<RouteStep> steps;
 
   PlannedRoute({
@@ -31,7 +37,13 @@ class PlannedRoute {
     required this.distanceMiles,
     required this.summary,
     required this.avoidedRoads,
+    this.routeExplanations = const [],
     required this.safetyStatus,
+    this.safetyScore = 100,
+    this.routeCost = 0.0,
+    this.totalRisk = 0.0,
+    this.riskReductionPercentage,
+    this.timePenaltyMin,
     required this.steps,
   });
 }

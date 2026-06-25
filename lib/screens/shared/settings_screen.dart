@@ -16,7 +16,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _guardianMode = true;
   bool _pushAlerts = true;
   bool _offlineMaps = true;
-  bool _highContrastRoutes = false;
+  bool _mapDarkMode = true;
 
   @override
   Widget build(BuildContext context) {
@@ -79,11 +79,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 12),
             _SettingsToggleCard(
-              title: 'High Contrast Route Display',
-              subtitle: 'Increase route marker visibility on map screens.',
-              icon: Icons.contrast_rounded,
-              value: _highContrastRoutes,
-              onChanged: (value) => setState(() => _highContrastRoutes = value),
+              title: 'Dynamic Map Dark Mode',
+              subtitle: 'Automatically switch map style based on device system theme.',
+              icon: Icons.dark_mode_rounded,
+              value: _mapDarkMode,
+              onChanged: (value) => setState(() => _mapDarkMode = value),
             ),
             const SizedBox(height: 24),
             Container(

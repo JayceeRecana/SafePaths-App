@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 
 class Test extends StatefulWidget {
+  const Test({super.key});
+
   @override
   State<Test> createState() => _TestState();
 }

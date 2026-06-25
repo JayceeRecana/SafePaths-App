@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/app_state_service.dart';
 
 class BottomNavBar extends StatelessWidget {
   final int currentIndex;
@@ -50,13 +51,18 @@ class BottomNavBar extends StatelessWidget {
                 onTap: () => onTap(1),
                 hasNotification: false,
               ),
-              _NavItem(
-                icon: Icons.notifications_outlined,
-                activeIcon: Icons.notifications,
-                label: 'ALERTS',
-                isActive: currentIndex == 2,
-                onTap: () => onTap(2),
-                hasNotification: true,
+              ListenableBuilder(
+                listenable: AppStateService.instance,
+                builder: (context, _) {
+                  return _NavItem(
+                    icon: Icons.notifications_outlined,
+                    activeIcon: Icons.notifications,
+                    label: 'ALERTS',
+                    isActive: currentIndex == 2,
+                    onTap: () => onTap(2),
+                    hasNotification: AppStateService.instance.alerts.isNotEmpty,
+                  );
+                }
               ),
             ],
           ),

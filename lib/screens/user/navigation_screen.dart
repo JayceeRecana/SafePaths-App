@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'package:geolocator/geolocator.dart' as geo;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -5,6 +8,10 @@ import '../../theme/app_colors.dart';
 import '../../models/planned_route.dart';
 import '../../widgets/app_map.dart';
 import '../../services/app_state_service.dart';
+import '../../services/location_service.dart';
+import '../../services/routing_service.dart';
+import '../../services/weather_service.dart';
+import '../../config/risk_config.dart';
 
 class NavigationScreen extends StatefulWidget {
   final PlannedRoute route;
@@ -16,13 +23,27 @@ class NavigationScreen extends StatefulWidget {
 }
 
 class _NavigationScreenState extends State<NavigationScreen> {
+  late PlannedRoute _currentRoute;
   int _currentStepIndex = 0;
   final FlutterTts flutterTts = FlutterTts();
+  
+  StreamSubscription<Position>? _positionSubscription;
+  Position? _currentLocation;
+  bool _isReRouting = false;
+  Timer? _stalenessTimer;
+  Map<String, String> _roadStatusCache = {};
 
   @override
   void initState() {
     super.initState();
+    _currentRoute = widget.route;
     _initTts();
+    _startLocationTracking();
+    AppStateService.instance.addListener(_onAdminFloodUpdate);
+    
+    _stalenessTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      _checkRouteStaleness();
+    });
   }
 
   Future<void> _initTts() async {
@@ -33,8 +54,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   Future<void> _speakCurrentStep() async {
-    if (widget.route.steps.isNotEmpty && _currentStepIndex < widget.route.steps.length) {
-      final step = widget.route.steps[_currentStepIndex];
+    if (_currentRoute.steps.isNotEmpty && _currentStepIndex < _currentRoute.steps.length) {
+      final step = _currentRoute.steps[_currentStepIndex];
       // Speak the instruction, stripping out HTML if Mapbox includes it occasionally
       final textToSpeak = step.instruction.replaceAll(RegExp(r'<[^>]*>'), '');
       await flutterTts.speak(textToSpeak);
@@ -42,7 +63,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _nextStep() {
-    if (_currentStepIndex < widget.route.steps.length - 1) {
+    if (_currentStepIndex < _currentRoute.steps.length - 1) {
       setState(() {
         _currentStepIndex++;
       });
@@ -50,16 +71,229 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
+  void _startLocationTracking() {
+    _positionSubscription = LocationService.getPositionStream()?.listen((Position position) {
+      if (!mounted || _isReRouting) return;
+      
+      setState(() {
+        _currentLocation = position;
+      });
+
+      _checkAutoAdvance(position);
+      _checkOffRoute(position);
+    });
+  }
+
+  void _checkAutoAdvance(Position currentLoc) {
+    if (_currentStepIndex >= _currentRoute.steps.length) return;
+    
+    final stepLoc = _currentRoute.steps[_currentStepIndex].location;
+    final distance = geo.Geolocator.distanceBetween(
+      currentLoc.lat.toDouble(), currentLoc.lng.toDouble(),
+      stepLoc.lat.toDouble(), stepLoc.lng.toDouble()
+    );
+
+    // If within 20 meters of the turn/step, auto-advance
+    if (distance < 20) {
+      _nextStep();
+    }
+  }
+
+  void _checkOffRoute(Position currentLoc) {
+    if (_currentRoute.points.isEmpty) return;
+
+    double minDistance = double.infinity;
+    for (final pt in _currentRoute.points) {
+      final d = geo.Geolocator.distanceBetween(
+        currentLoc.lat.toDouble(), currentLoc.lng.toDouble(),
+        pt.lat.toDouble(), pt.lng.toDouble()
+      );
+      if (d < minDistance) minDistance = d;
+    }
+
+    // If more than 50 meters away from the closest point on the route polyline, recalculate!
+    if (minDistance > 50) {
+      _triggerReRoute("Off route detected! Recalculating...");
+    }
+  }
+
+  void _checkRouteStaleness() {
+    if (!mounted || _isReRouting || _currentLocation == null) return;
+    final weatherState = SimulatedWeatherService.instance.currentState;
+    bool isSevereWeather = weatherState == WeatherState.heavyRain || weatherState == WeatherState.typhoon;
+    if (!isSevereWeather) return;
+
+    final appState = AppStateService.instance;
+    bool needsReRoute = false;
+
+    for (final road in appState.roads) {
+      double hoursOld = DateTime.now().difference(road.updatedAt).inMinutes / 60.0;
+      bool isStaleData = hoursOld >= 1.0;
+      if (road.status != 'passable' || !isStaleData) continue;
+      if (road.geometry == null) continue;
+
+      final coordsDyn = road.geometry!['coordinates'] as List<dynamic>?;
+      if (coordsDyn == null) continue;
+
+      List<Position> roadPts = [];
+      for (final c in coordsDyn) {
+        double? roadLon, roadLat;
+        if (c is Map) {
+          roadLon = (c['lon'] as num?)?.toDouble();
+          roadLat = (c['lat'] as num?)?.toDouble();
+        } else if (c is List && c.length >= 2) {
+          roadLon = (c[0] as num?)?.toDouble();
+          roadLat = (c[1] as num?)?.toDouble();
+        }
+        if (roadLon != null && roadLat != null) {
+          roadPts.add(Position(roadLon, roadLat));
+        }
+      }
+
+      if (roadPts.length >= 2 && RoutingService.doesRouteCrossRoad(_currentRoute.points, roadPts, thresholdMeters: 30.0)) {
+        needsReRoute = true;
+        break;
+      }
+    }
+
+    if (needsReRoute) {
+      _triggerReRoute("Predictive Model Active: Re-evaluating safe routes due to stale road data.");
+    }
+  }
+
+  void _onAdminFloodUpdate() {
+    if (!mounted || _isReRouting || _currentLocation == null) return;
+    
+    final appState = AppStateService.instance;
+    final weatherState = SimulatedWeatherService.instance.currentState;
+
+    bool anyStatusChanged = false;
+    for (final road in appState.roads) {
+      final effStatus = road.getEffectiveStatus(weatherState);
+      if (_roadStatusCache[road.id] != effStatus) {
+        anyStatusChanged = true;
+        _roadStatusCache[road.id] = effStatus;
+      }
+    }
+
+    if (!anyStatusChanged) return;
+    
+    bool routeAffected = false;
+
+    for (final road in appState.roads) {
+      if (road.getEffectiveStatus(weatherState) == 'passable') continue;
+      if (road.geometry == null) continue;
+
+      final coordsDyn = road.geometry!['coordinates'] as List<dynamic>?;
+      if (coordsDyn == null) continue;
+
+      List<Position> roadPts = [];
+      for (final c in coordsDyn) {
+        double? roadLon, roadLat;
+        if (c is Map) {
+          roadLon = (c['lon'] as num?)?.toDouble();
+          roadLat = (c['lat'] as num?)?.toDouble();
+        } else if (c is List && c.length >= 2) {
+          roadLon = (c[0] as num?)?.toDouble();
+          roadLat = (c[1] as num?)?.toDouble();
+        }
+        if (roadLon != null && roadLat != null) {
+          roadPts.add(Position(roadLon, roadLat));
+        }
+      }
+
+      if (roadPts.length >= 2 && RoutingService.doesRouteCrossRoad(_currentRoute.points, roadPts, thresholdMeters: 30.0)) {
+        routeAffected = true;
+        break;
+      }
+    }
+    
+    if (routeAffected) {
+      _triggerReRoute("DANGER: Road conditions changed! Recalculating safe route...");
+    }
+  }
+
+  Future<void> _triggerReRoute(String message) async {
+    if (_isReRouting || _currentLocation == null) return;
+    setState(() {
+      _isReRouting = true;
+    });
+
+    flutterTts.speak(message);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppColors.error,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+
+    // Update the RoutingService origin to the live location and recalculate
+    final routing = RoutingService.instance;
+    routing.originPoint = _currentLocation;
+    await routing.calculateRoute();
+
+    if (!mounted) return;
+
+    if (routing.routes.isNotEmpty) {
+      final bestRoute = routing.routes.first;
+      
+      if (bestRoute.safetyStatus == 'flooded') {
+        // Destination completely unreachable
+        flutterTts.speak("Destination is blocked by floods. Please pull over safely.");
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('Destination Unreachable', style: TextStyle(color: AppColors.error)),
+            content: const Text('All paths to your destination are now blocked by impassable floods. For your safety, navigation has been halted.'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context); // Close dialog
+                  Navigator.pop(context); // Close navigation
+                },
+                child: const Text('Exit Navigation'),
+              )
+            ],
+          )
+        );
+      } else {
+        // Successfully found a new safe route!
+        setState(() {
+          _currentRoute = bestRoute;
+          _currentStepIndex = 0;
+          _isReRouting = false;
+        });
+        flutterTts.speak("New safe route found. Continuing navigation.");
+      }
+    } else {
+      // Failed to get routes from mapbox (e.g. no internet)
+      setState(() {
+        _isReRouting = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Couldn\'t recalculate — check connection, proceed with caution.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
+    AppStateService.instance.removeListener(_onAdminFloodUpdate);
+    _positionSubscription?.cancel();
+    _stalenessTimer?.cancel();
     flutterTts.stop();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final currentStep = widget.route.steps.isNotEmpty && _currentStepIndex < widget.route.steps.length
-        ? widget.route.steps[_currentStepIndex]
+    final currentStep = _currentRoute.steps.isNotEmpty && _currentStepIndex < _currentRoute.steps.length
+        ? _currentRoute.steps[_currentStepIndex]
         : null;
 
     return Scaffold(
@@ -67,7 +301,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         children: [
           // 1. The Map
           AppMap(
-            routePoints: widget.route.points,
+            routePoints: _currentRoute.points,
           ),
 
           // 2. Top Maneuver Banner
@@ -151,6 +385,43 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   Widget _buildBottomStatusBar(BuildContext context) {
+    if (_isReRouting) {
+      return Container(
+        padding: EdgeInsets.only(
+          left: 24,
+          right: 24,
+          top: 32,
+          bottom: MediaQuery.of(context).padding.bottom + 32,
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 20,
+              offset: const Offset(0, -5),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(width: 16),
+            Text(
+              'Recalculating Route...',
+              style: GoogleFonts.manrope(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: AppColors.primary,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: EdgeInsets.only(
         left: 24,
@@ -178,7 +449,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '${widget.route.durationMin} min',
+                  '${_currentRoute.durationMin} min',
                   style: GoogleFonts.manrope(
                     fontSize: 28,
                     fontWeight: FontWeight.w800,
@@ -187,7 +458,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   ),
                 ),
                 Text(
-                  '${widget.route.distanceMiles} mi • ${widget.route.summary}',
+                  '${_currentRoute.distanceMiles} mi • ${_currentRoute.summary}',
                   style: GoogleFonts.inter(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -202,7 +473,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (_currentStepIndex < widget.route.steps.length - 1)
+              if (_currentStepIndex < _currentRoute.steps.length - 1)
                 ElevatedButton(
                   onPressed: _nextStep,
                   style: ElevatedButton.styleFrom(

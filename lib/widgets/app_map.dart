@@ -4,50 +4,67 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import '../services/app_state_service.dart';
 import '../services/user_service.dart';
+import '../../services/location_service.dart';
+import '../../services/weather_service.dart';
+import '../../utils/constants.dart';
 import '../screens/user/road_details_screen.dart';
- 
+
 class AppMap extends StatefulWidget {
   final bool showSearchButton;
   final Function(MapboxMap mapboxMap)? onMapCreatedCallback;
+  final Function(String roadId, Position? tappedPosition)? onRoadTapped;
   final List<Position>? routePoints;
   const AppMap({
     super.key,
     this.showSearchButton = false,
     this.onMapCreatedCallback,
+    this.onRoadTapped,
     this.routePoints,
   });
  
   @override
-  State<AppMap> createState() => _AppMapState();
+  State<AppMap> createState() => AppMapState();
 }
  
-class _AppMapState extends State<AppMap> {
+class AppMapState extends State<AppMap> {
   MapboxMap? _mapboxMap;
   
   final TextEditingController _searchController = TextEditingController();
   bool _isDrawing = false;
   bool _drawPending = false;
  
-  static const String _publicToken =
-      'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTlldHMweDAyOGYzMnM3a202dWc1encifQ.3bSUr0nz6i29AtlnB2HlHw';
+  static const String _publicToken = String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg');
  
   @override
   void initState() {
     super.initState();
     MapboxOptions.setAccessToken(_publicToken);
     AppStateService.instance.addListener(_onStateChanged);
+    SimulatedWeatherService.instance.listenable.addListener(_onWeatherChanged);
   }
  
   @override
   void dispose() {
     AppStateService.instance.removeListener(_onStateChanged);
+    SimulatedWeatherService.instance.listenable.removeListener(_onWeatherChanged);
     _searchController.dispose();
     super.dispose();
   }
  
   void _onStateChanged() {
-    _drawData();
+    if (mounted) {
+      setState(() {});
+      _drawData();
+    }
   }
+
+  void _onWeatherChanged() {
+    if (mounted) {
+      setState(() {});
+      _drawData();
+    }
+  }
+
 
   @override
   void didUpdateWidget(covariant AppMap oldWidget) {
@@ -92,10 +109,19 @@ class _AppMapState extends State<AppMap> {
     final screenCoordinate = await _mapboxMap!.pixelForCoordinate(ctx.point);
     if (!mounted) return;
 
+    final x = screenCoordinate.x;
+    final y = screenCoordinate.y;
+    final tapBox = RenderedQueryGeometry.fromScreenBox(
+      ScreenBox(
+        min: ScreenCoordinate(x: x - 15, y: y - 15),
+        max: ScreenCoordinate(x: x + 15, y: y + 15),
+      ),
+    );
+
     // 1. Try to query our custom flood-monitored roads layer first (for both users and admins)
     try {
       final roadFeatures = await _mapboxMap!.queryRenderedFeatures(
-        RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
+        tapBox,
         RenderedQueryOptions(layerIds: ['roads-layer'], filter: null),
       );
       if (!mounted) return;
@@ -108,11 +134,11 @@ class _AppMapState extends State<AppMap> {
           if (properties != null) {
             final roadId = properties['id']?.toString();
             if (roadId != null) {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => RoadDetailsScreen(roadId: roadId),
-                ),
-              );
+              if (widget.onRoadTapped != null) {
+                widget.onRoadTapped!(roadId, ctx.point.coordinates);
+              } else {
+                Navigator.of(context).push(RoadDetailsScreen.route(roadId));
+              }
               return; // Handled click on monitored road, stop execution
             }
           }
@@ -129,34 +155,104 @@ class _AppMapState extends State<AppMap> {
 
     try {
       final features = await _mapboxMap!.queryRenderedFeatures(
-        RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
+        tapBox,
         RenderedQueryOptions(layerIds: null, filter: null)
       );
 
       String? roadName;
+      
+      // 1. Prioritize line features (roads) that have a name
       for (final feature in features) {
-        final props = feature?.queriedFeature.feature['properties'] as Map?;
-        if (props != null && props.containsKey('name')) {
-          roadName = props['name'];
-          break;
+        final mapFeat = feature?.queriedFeature.feature;
+        if (mapFeat != null) {
+          final props = mapFeat['properties'] as Map?;
+          final geom = mapFeat['geometry'] as Map?;
+          if (props != null && props.containsKey('name') && geom != null) {
+            final type = geom['type'].toString();
+            if (type == 'LineString' || type == 'MultiLineString') {
+              roadName = props['name'].toString();
+              break;
+            }
+          }
+        }
+      }
+      
+      // 2. Fallback if no line was found (maybe it's a weird geometry), but explicitly ignore neighborhoods
+      if (roadName == null) {
+        for (final feature in features) {
+          final props = feature?.queriedFeature.feature['properties'] as Map?;
+          if (props != null && props.containsKey('name')) {
+            final name = props['name'].toString().toLowerCase();
+            if (!name.contains('barangay') && !name.contains('approximate') && !name.contains('philippines') && !name.contains('city')) {
+              roadName = props['name'].toString();
+              break;
+            }
+          }
+        }
+      }
+
+      // 2. If no explicit road name found, look for something with class 'street' or 'road'
+      if (roadName == null) {
+        for (final feature in features) {
+          final props = feature?.queriedFeature.feature['properties'] as Map?;
+          if (props != null && props.containsKey('name')) {
+            final String featureClass = (props['class'] ?? '').toString().toLowerCase();
+            final String featureType = (props['type'] ?? '').toString().toLowerCase();
+            if (featureClass == 'street' || featureClass == 'road' || featureClass == 'motorway' || featureClass == 'primary' || featureClass == 'secondary' || featureClass == 'tertiary' || featureType == 'road') {
+              roadName = props['name'];
+              break;
+            }
+          }
+        }
+      }
+
+      // 3. Absolute fallback: take anything that doesn't sound like a neighborhood
+      if (roadName == null) {
+        for (final feature in features) {
+          final props = feature?.queriedFeature.feature['properties'] as Map?;
+          if (props != null && props.containsKey('name')) {
+             final nameLower = props['name'].toString().toLowerCase();
+             if (!nameLower.contains('barangay') && !nameLower.contains('city') && !nameLower.contains('philippines') && !nameLower.contains('approximate')) {
+               roadName = props['name'];
+               break;
+             }
+          }
         }
       }
 
       if (roadName != null && roadName.isNotEmpty) {
-        await _fetchRoadGeometry(roadName);
+        await fetchRoadGeometry(roadName);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not detect street name. Please type it in the Search bar above.')));
+        }
       }
     } catch (e) {
       debugPrint('[AppMap] Error querying map for road name: $e');
     }
   }
 
-  Future<void> _fetchRoadGeometry(String roadName) async {
+  Future<void> fetchRoadGeometry(String roadName) async {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fetching geometry for "$roadName"...')));
 
+    // Clean up name to match OSM easier (remove suffixes)
+    String cleanName = roadName.toLowerCase();
+    cleanName = cleanName.replaceAll(RegExp(r'\s+street$'), '');
+    cleanName = cleanName.replaceAll(RegExp(r'\s+st\.?$'), '');
+    cleanName = cleanName.replaceAll(RegExp(r'\s+road$'), '');
+    cleanName = cleanName.replaceAll(RegExp(r'\s+rd\.?$'), '');
+    cleanName = cleanName.replaceAll(RegExp(r'\s+avenue$'), '');
+    cleanName = cleanName.replaceAll(RegExp(r'\s+ave\.?$'), '');
+
+    // Use the exact polygon boundary of Barangay Marulas
     final String query = '''
       [out:json];
-      way["name"~"$roadName",i](14.6740, 120.9810, 14.6820, 120.9890);
+      (
+        way["name"~"$cleanName",i](poly:"${Constants.marulasPoly}");
+        relation["name"~"$cleanName",i](poly:"${Constants.marulasPoly}");
+        way(r);
+      );
       out geom;
     ''';
     
@@ -175,16 +271,28 @@ class _AppMapState extends State<AppMap> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['elements'] != null && data['elements'].isNotEmpty) {
-          final way = data['elements'][0];
-          if (way['geometry'] != null) {
-            final coordinates = way['geometry'].map((g) => {
-              'lon': g['lon'],
-              'lat': g['lat']
-            }).toList();
-            
-            // FLY CAMERA TO THE FOUND ROAD
-            if (coordinates.isNotEmpty && _mapboxMap != null) {
-              final firstCoord = coordinates[0];
+          final elements = data['elements'] as List;
+          
+          // Aggregate ALL segments that match this road name into a single MultiLineString structure
+          final List<List<Map<String, dynamic>>> allSegments = [];
+
+          for (final way in elements) {
+            if (way['geometry'] != null) {
+              final coordinates = way['geometry'].map((g) => {
+                'lon': g['lon'],
+                'lat': g['lat']
+              }).cast<Map<String, dynamic>>().toList();
+              
+              if (coordinates.isNotEmpty) {
+                allSegments.add(coordinates);
+              }
+            }
+          }
+
+          if (allSegments.isNotEmpty) {
+            // FLY CAMERA TO THE FIRST COORDINATE OF THE FIRST SEGMENT
+            if (_mapboxMap != null) {
+              final firstCoord = allSegments.first.first;
               _mapboxMap!.flyTo(
                 CameraOptions(
                   center: Point(
@@ -196,12 +304,15 @@ class _AppMapState extends State<AppMap> {
               );
             }
 
-            final geometry = {
-              "type": "LineString",
-              "coordinates": coordinates
-            };
+            // Wrap segments in a map to avoid Firestore nested array crash
+            final firestoreSafeSegments = allSegments.map((seg) => {'points': seg}).toList();
+
+            // Open dialog to save ALL segments
             if (mounted) {
-              _showAddRoadDialog(roadName, geometry);
+              _showAddRoadDialog(roadName, {
+                'type': 'MultiLineString',
+                'segments': firestoreSafeSegments,
+              });
             }
           }
         } else {
@@ -238,15 +349,18 @@ class _AppMapState extends State<AppMap> {
       if (_mapboxMap != null && matchedRoad.geometry != null) {
         final coordsDyn = matchedRoad.geometry!['coordinates'] as List<dynamic>?;
         if (coordsDyn != null && coordsDyn.isNotEmpty) {
+          final middleIndex = coordsDyn.length ~/ 2;
+          final middleCoord = coordsDyn[middleIndex];
+            
           double? lon;
           double? lat;
-          final first = coordsDyn.first;
-          if (first is Map) {
-            lon = (first['lon'] as num?)?.toDouble();
-            lat = (first['lat'] as num?)?.toDouble();
-          } else if (first is List && first.length >= 2) {
-            lon = (first[0] as num?)?.toDouble();
-            lat = (first[1] as num?)?.toDouble();
+            
+          if (middleCoord is Map) {
+            lon = (middleCoord['lon'] as num?)?.toDouble();
+            lat = (middleCoord['lat'] as num?)?.toDouble();
+          } else if (middleCoord is List && middleCoord.length >= 2) {
+            lon = (middleCoord[0] as num?)?.toDouble();
+            lat = (middleCoord[1] as num?)?.toDouble();
           }
 
           if (lon != null && lat != null) {
@@ -317,6 +431,11 @@ class _AppMapState extends State<AppMap> {
       }
     } catch (e) {
       debugPrint('[AppMap] Geocoding error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Network error: Could not connect to map service.')),
+        );
+      }
     }
   }
 
@@ -399,48 +518,95 @@ class _AppMapState extends State<AppMap> {
         if (road.geometry == null) continue;
 
         final coordsDyn = road.geometry!['coordinates'] as List<dynamic>?;
-        if (coordsDyn == null) continue;
 
-        List<List<double>> geojsonCoords = [];
-        for (final pt in coordsDyn) {
-          if (pt is Map) {
-            final lon = pt['lon'] as num?;
-            final lat = pt['lat'] as num?;
-            if (lon != null && lat != null) {
-              geojsonCoords.add([lon.toDouble(), lat.toDouble()]);
+        List<List<List<double>>> allSegmentsCoords = [];
+
+        // Check if geometry contains 'segments' (our Firestore-safe MultiLineString)
+        bool isMultiSegment = road.geometry!.containsKey('segments');
+        final segmentsDyn = road.geometry!['segments'] as List<dynamic>?;
+        
+        if (isMultiSegment && segmentsDyn != null) {
+          for (var segmentWrapper in segmentsDyn) {
+            if (segmentWrapper is Map && segmentWrapper.containsKey('points')) {
+              var segmentDyn = segmentWrapper['points'];
+              if (segmentDyn is List) {
+                List<List<double>> segCoords = [];
+                for (var pt in segmentDyn) {
+                  if (pt is Map) {
+                    final lon = (pt['lon'] as num?) ?? (pt['lng'] as num?);
+                    final lat = pt['lat'] as num?;
+                    if (lon != null && lat != null) {
+                      segCoords.add([lon.toDouble(), lat.toDouble()]);
+                    }
+                  }
+                }
+                if (segCoords.isNotEmpty) {
+                  allSegmentsCoords.add(segCoords);
+                }
+              }
             }
-          } else if (pt is List && pt.length >= 2) {
-            final lon = pt[0] as num?;
-            final lat = pt[1] as num?;
-            if (lon != null && lat != null) {
-              geojsonCoords.add([lon.toDouble(), lat.toDouble()]);
+          }
+        } else if (coordsDyn != null) {
+          // Old single-segment format
+          List<List<double>> geojsonCoords = [];
+          for (final pt in coordsDyn) {
+            if (pt is Map) {
+              final lon = (pt['lon'] as num?) ?? (pt['lng'] as num?);
+              final lat = pt['lat'] as num?;
+              if (lon != null && lat != null) {
+                geojsonCoords.add([lon.toDouble(), lat.toDouble()]);
+              }
+            } else if (pt is List && pt.length >= 2) {
+              final lon = pt[0] as num?;
+              final lat = pt[1] as num?;
+              if (lon != null && lat != null) {
+                geojsonCoords.add([lon.toDouble(), lat.toDouble()]);
+              }
             }
+          }
+          if (geojsonCoords.isNotEmpty) {
+            allSegmentsCoords.add(geojsonCoords);
           }
         }
 
-        if (geojsonCoords.isEmpty) continue;
+        if (allSegmentsCoords.isEmpty) continue;
+
+        final weatherState = SimulatedWeatherService.instance.currentState;
+        final effectiveStatus = road.getEffectiveStatus(weatherState);
 
         String colorHex = '#006E1C';
-        if (road.status == 'partial') {
+        if (effectiveStatus == 'partial') {
           colorHex = '#EAB308';
-        } else if (road.status == 'not_passable') {
+        } else if (effectiveStatus == 'not_passable') {
           colorHex = '#B81311';
         }
 
-        features.add({
-          'type': 'Feature',
-          'id': road.id,
-          'geometry': {
-            'type': 'LineString',
-            'coordinates': geojsonCoords,
-          },
-          'properties': {
-            'id': road.id,
-            'name': road.name,
-            'status': road.status,
-            'color': colorHex,
-          },
-        });
+        String glowHex = 'rgba(0, 0, 0, 0.0)'; // Transparent by default
+        if (road.riskCategory == 'Critical') {
+          glowHex = 'rgba(255, 0, 0, 0.5)'; // Red 50%
+        } else if (road.riskCategory == 'Warning') {
+          glowHex = 'rgba(255, 165, 0, 0.4)'; // Orange 40%
+        } else if (road.riskCategory == 'Watch') {
+          glowHex = 'rgba(255, 255, 0, 0.3)'; // Yellow 30%
+        }
+
+        for (int i = 0; i < allSegmentsCoords.length; i++) {
+          features.add({
+            'type': 'Feature',
+            'id': '${road.id}_$i',
+            'geometry': {
+              'type': 'LineString',
+              'coordinates': allSegmentsCoords[i],
+            },
+            'properties': {
+              'id': road.id,
+              'name': road.name,
+              'status': effectiveStatus, // Using effective status for clicks
+              'color': colorHex,
+              'glowColor': glowHex,
+            },
+          });
+        }
       }
 
       final geoJson = {
@@ -465,13 +631,26 @@ class _AppMapState extends State<AppMap> {
       }
 
       final layerExists = await style.styleLayerExists(layerId);
+      final glowLayerId = 'roads-glow-layer';
+
+      if (!await style.styleLayerExists(glowLayerId)) {
+        await style.addLayer(LineLayer(
+          id: glowLayerId,
+          sourceId: sourceId,
+          lineJoin: LineJoin.ROUND,
+          lineCap: LineCap.ROUND,
+          lineColorExpression: ['to-color', ['get', 'glowColor']],
+          lineWidth: 16.0, // Wider for glow effect
+        ));
+      }
+
       if (!layerExists) {
         await style.addLayer(LineLayer(
           id: layerId,
           sourceId: sourceId,
           lineJoin: LineJoin.ROUND,
           lineCap: LineCap.ROUND,
-          lineColorExpression: ['get', 'color'],
+          lineColorExpression: ['to-color', ['get', 'color']],
           lineWidth: 6.0,
         ));
       }
@@ -531,17 +710,55 @@ class _AppMapState extends State<AppMap> {
 
   @override
   Widget build(BuildContext context) {
+
     return Stack(
       children: [
         MapWidget(
-          styleUri: MapboxStyles.MAPBOX_STREETS,
+          styleUri: 'mapbox://styles/jayceerecana/cmqk7pl2d000a01rdfw0ubgo0',
           androidHostingMode: AndroidPlatformViewHostingMode.HC,
           textureView: false,
           onMapCreated: _onMapCreated,
           onTapListener: _onMapTapped,
-          onStyleLoadedListener: (StyleLoadedEventData data) {
+          onStyleLoadedListener: (StyleLoadedEventData data) async {
             debugPrint('[AppMap] Style loaded successfully!');
             _drawData();
+            try {
+              if (_mapboxMap != null) {
+                // Add the Mapbox composite source for buildings if it exists in the style
+                await _mapboxMap!.style.addStyleLayer(jsonEncode({
+                  'id': '3d-buildings',
+                  'source': 'composite',
+                  'source-layer': 'building',
+                  'filter': ['==', 'extrude', 'true'],
+                  'type': 'fill-extrusion',
+                  'minzoom': 15,
+                  'paint': {
+                    'fill-extrusion-color': '#aaaaaa',
+                    'fill-extrusion-height': [
+                      'interpolate',
+                      ['linear'],
+                      ['zoom'],
+                      15,
+                      0,
+                      15.05,
+                      ['get', 'height']
+                    ],
+                    'fill-extrusion-base': [
+                      'interpolate',
+                      ['linear'],
+                      ['zoom'],
+                      15,
+                      0,
+                      15.05,
+                      ['get', 'min_height']
+                    ],
+                    'fill-extrusion-opacity': 0.6
+                  }
+                }), null);
+              }
+            } catch (e) {
+              debugPrint('[AppMap] Could not add 3D buildings layer: $e');
+            }
           },
           onMapLoadedListener: (MapLoadedEventData data) {
             debugPrint('[AppMap] Map fully loaded with tiles!');
@@ -553,9 +770,13 @@ class _AppMapState extends State<AppMap> {
             center: Point(
               coordinates: Position(120.9842, 14.6761), // Barangay Marulas, Valenzuela City
             ),
-            zoom: 14.0,
+            zoom: 14.5,
+            pitch: 60.0,
+            bearing: -15.0,
           ),
         ),
+
+
         if (widget.showSearchButton)
           Positioned(
             top: MediaQuery.of(context).padding.top + 80,
@@ -639,7 +860,7 @@ class _AppMapState extends State<AppMap> {
                           _searchController.clear();
                           final role = await UserService.getUserRole();
                           if (role == UserRole.admin) {
-                            _fetchRoadGeometry(query);
+                            fetchRoadGeometry(query);
                           } else {
                             _userSearchAndHighlight(query);
                           }

@@ -37,4 +37,15 @@ class LocationService {
 
     return Position(geoPosition.longitude, geoPosition.latitude);
   }
+
+  /// Returns a continuous stream of the device's location updates.
+  static Stream<Position>? getPositionStream() {
+    // Only return a stream if permissions are likely granted
+    return geo.Geolocator.getPositionStream(
+      locationSettings: const geo.LocationSettings(
+        accuracy: geo.LocationAccuracy.high,
+        distanceFilter: 5, // Update every 5 meters
+      ),
+    ).map((geoPosition) => Position(geoPosition.longitude, geoPosition.latitude));
+  }
 }

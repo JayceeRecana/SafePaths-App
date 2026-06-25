@@ -2,18 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
+import '../../services/app_state_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class EditProfileScreen extends StatefulWidget {
-  const EditProfileScreen({super.key});
+  final UserProfile user;
+  const EditProfileScreen({super.key, required this.user});
 
   @override
   State<EditProfileScreen> createState() => _EditProfileScreenState();
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  final _nameController = TextEditingController(text: 'Jaycee');
-  final _emailController = TextEditingController(text: 'jaycee@example.com');
-  final _locationController = TextEditingController(text: 'Brgy. Marulas');
+  late final TextEditingController _nameController;
+  late final TextEditingController _emailController;
+  late final TextEditingController _locationController;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.user.name);
+    _emailController = TextEditingController(text: widget.user.email);
+    _locationController = TextEditingController(text: widget.user.location);
+  }
 
   @override
   void dispose() {
@@ -23,11 +35,28 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.dispose();
   }
 
-  void _saveDetails() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Profile details saved.')),
-    );
-    Navigator.of(context).pop();
+  Future<void> _saveDetails() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+    
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(widget.user.id).update({
+        'name': _nameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'location': _locationController.text.trim(),
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile details saved.')),
+      );
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save details: $e')),
+      );
+    }
   }
 
   @override
@@ -98,10 +127,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   ),
-                  child: Text(
-                    'Save Details',
-                    style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white),
-                  ),
+                  child: _isLoading 
+                      ? const SizedBox(
+                          height: 24, width: 24,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                        )
+                      : Text(
+                          'Save Details',
+                          style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white),
+                        ),
                 ),
               ),
             ),

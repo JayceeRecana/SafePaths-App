@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../theme/app_colors.dart';
 import '../../services/user_service.dart';
 import 'registration_screen.dart';
@@ -27,22 +29,61 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  bool _isLoading = false;
+
   void _login() async {
-    // TEMPORARY: Bypassing login validation since there is no backend yet
-    // Check if user has a stored role, otherwise default to user
-    final role = await UserService.getUserRole();
-    await UserService.setLoggedIn(true);
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
 
-    if (!mounted) return;
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your email and password.')),
+      );
+      return;
+    }
 
-    if (role == UserRole.admin) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
+    setState(() => _isLoading = true);
+
+    try {
+      final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
       );
-    } else {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const UserHomeScreen()),
+
+      final user = userCredential.user;
+      if (user != null) {
+        // Fetch role from Firestore
+        final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+        final roleString = doc.data()?['role'] ?? 'user';
+        final role = roleString == 'admin' ? UserRole.admin : UserRole.user;
+
+        await UserService.saveUserRole(role);
+        await UserService.setLoggedIn(true);
+
+        if (!mounted) return;
+
+        if (role == UserRole.admin) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
+          );
+        } else {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const UserHomeScreen()),
+          );
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Login failed.')),
       );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('An error occurred: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -311,25 +352,34 @@ class _LoginScreenState extends State<LoginScreen> {
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                   ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        'Login',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.white,
+                                  child: _isLoading
+                                      ? const SizedBox(
+                                          height: 24,
+                                          width: 24,
+                                          child: CircularProgressIndicator(
+                                            color: Colors.white,
+                                            strokeWidth: 2.5,
+                                          ),
+                                        )
+                                      : Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Text(
+                                              'Login',
+                                              style: GoogleFonts.inter(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w700,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            const Icon(
+                                              Icons.arrow_forward,
+                                              color: Colors.white,
+                                              size: 20,
+                                            ),
+                                          ],
                                         ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      const Icon(
-                                        Icons.arrow_forward,
-                                        color: Colors.white,
-                                        size: 20,
-                                      ),
-                                    ],
-                                  ),
                                 ),
                               ),
                             ),
@@ -428,55 +478,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                       const SizedBox(height: 24),
-                      // DEV: Skip buttons for UI testing
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextButton(
-                              onPressed: () async {
-                                await UserService.saveUserRole(UserRole.user);
-                                await UserService.setLoggedIn(true);
-                                if (!context.mounted) return;
-                                Navigator.of(context).pushReplacement(
-                                  MaterialPageRoute(
-                                    builder: (_) => const UserHomeScreen(),
-                                  ),
-                                );
-                              },
-                              child: Text(
-                                'Skip to User',
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: TextButton(
-                              onPressed: () async {
-                                await UserService.saveUserRole(UserRole.admin);
-                                await UserService.setLoggedIn(true);
-                                if (!context.mounted) return;
-                                Navigator.of(context).pushReplacement(
-                                  MaterialPageRoute(
-                                    builder: (_) => const AdminHomeScreen(),
-                                  ),
-                                );
-                              },
-                              child: Text(
-                                'Skip to Admin',
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),

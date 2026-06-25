@@ -3,15 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart' as geo;
 import '../../theme/app_colors.dart';
 import '../../services/app_state_service.dart';
+import '../../services/weather_service.dart';
 import 'report_submission_screen.dart';
 import 'road_details_screen.dart';
 import '../shared/settings_screen.dart';
 import 'profile_screen.dart';
 import '../../widgets/app_map.dart';
+import '../../widgets/weather_map_overlay.dart';
 import '../shared/full_screen_map_screen.dart';
-import '../../models/planned_route.dart';
 
 class MapDashboardScreen extends StatefulWidget {
   const MapDashboardScreen({super.key});
@@ -24,25 +26,59 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
   String? _selectedRoadId;
   MapboxMap? _mapboxMap;
   bool _isSearching = false;
+  bool _isDetailsOpen = false;
 
-  // DUMMY ROUTING VARIABLES TO FIX COMPILATION
-  bool _isRoutePlanning = false;
-  final TextEditingController _destinationController = TextEditingController();
-  final FocusNode _destinationFocus = FocusNode();
-  List<Map<String, dynamic>> _suggestions = [];
-  bool _isRouteLoading = false;
-  String? _routeErrorMessage;
-  final Position _originPoint = Position(120.9842, 14.6761);
-  Position? _destinationPoint;
-  List<dynamic> _routes = [];
-  int _selectedRouteIndex = 0;
-  bool get isRoutePlanningMode => _isRoutePlanning;
+  static const String _mapboxToken = String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg');
 
-  void enterRoutePlanningMode() {}
-  void exitRoutePlanningMode() {}
-  void _calculateRoute() {}
-  Future<void> _onDestinationChanged(String q) async {}
-  void _selectDestination(String p, double a, double b) {}
+  void _onMapCreated(MapboxMap map) {
+    _mapboxMap = map;
+  }
+
+  Future<void> _flyToMyLocation() async {
+    if (_mapboxMap == null) return;
+    try {
+      bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location services disabled.')));
+        return;
+      }
+      geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+      }
+      if (permission == geo.LocationPermission.whileInUse || permission == geo.LocationPermission.always) {
+        geo.Position? position = await geo.Geolocator.getLastKnownPosition();
+        position ??= await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.high,
+            timeLimit: Duration(seconds: 5),
+          ),
+        );
+        _mapboxMap!.flyTo(
+          CameraOptions(
+            center: Point(coordinates: Position(position.longitude, position.latitude)),
+            zoom: 17.0,
+            padding: MbxEdgeInsets(
+              top: MediaQuery.sizeOf(context).height * 0.2,
+              left: 0,
+              bottom: MediaQuery.sizeOf(context).height * 0.3,
+              right: 0,
+            ),
+          ),
+          MapAnimationOptions(duration: 1000),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location permission denied.')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to get location: $e')));
+    }
+  }
+
+
 
 
 
@@ -57,24 +93,66 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
     double? lon;
     double? lat;
 
-    final first = coordsDyn.first;
-    if (first is Map) {
-      lon = (first['lon'] as num?)?.toDouble();
-      lat = (first['lat'] as num?)?.toDouble();
-    } else if (first is List && first.length >= 2) {
-      lon = (first[0] as num?)?.toDouble();
-      lat = (first[1] as num?)?.toDouble();
+    final middleIndex = coordsDyn.length ~/ 2;
+    final middleCoord = coordsDyn[middleIndex];
+    if (middleCoord is Map) {
+      lon = (middleCoord['lon'] as num?)?.toDouble() ?? (middleCoord['lng'] as num?)?.toDouble();
+      lat = (middleCoord['lat'] as num?)?.toDouble();
+    } else if (middleCoord is List && middleCoord.length >= 2) {
+      lon = (middleCoord[0] as num?)?.toDouble();
+      lat = (middleCoord[1] as num?)?.toDouble();
     }
 
     if (lon != null && lat != null) {
       _mapboxMap!.flyTo(
         CameraOptions(
           center: Point(coordinates: Position(lon, lat)),
-          zoom: 16.0,
+          zoom: 17.5,
+          pitch: 60.0,
+          bearing: -15.0,
+          padding: MbxEdgeInsets(
+            top: 0,
+            left: 0,
+            bottom: MediaQuery.sizeOf(context).height * 0.4,
+            right: 0,
+          ),
         ),
         MapAnimationOptions(duration: 1500),
       );
     }
+  }
+
+  void _handleRoadTapped(String roadId, Position? tappedPosition) async {
+    final appState = AppStateService.instance;
+    final roadIndex = appState.roads.indexWhere((r) => r.id == roadId);
+    if (roadIndex != -1) {
+      if (tappedPosition != null) {
+        _mapboxMap?.flyTo(
+          CameraOptions(
+            center: Point(coordinates: tappedPosition),
+            zoom: 17.5,
+            pitch: 60.0,
+            bearing: -15.0,
+            padding: MbxEdgeInsets(
+              top: 0,
+              left: 0,
+              bottom: MediaQuery.sizeOf(context).height * 0.4,
+              right: 0,
+            ),
+          ),
+          MapAnimationOptions(duration: 1500),
+        );
+      } else {
+        _flyToRoad(appState.roads[roadIndex]);
+      }
+    }
+    
+    setState(() {
+      _selectedRoadId = roadId;
+      _isDetailsOpen = true;
+    });
+    await Navigator.of(context).push(RoadDetailsScreen.route(roadId));
+    if (mounted) setState(() => _isDetailsOpen = false);
   }
 
   Future<void> _searchAndHighlight(String query) async {
@@ -97,20 +175,18 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
       setState(() {
         _selectedRoadId = matchedRoad!.id;
         _isSearching = false;
+        _isDetailsOpen = true;
       });
-      // Open Road Details screen
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => RoadDetailsScreen(roadId: matchedRoad!.id),
-        ),
-      );
+      // Open Road Details screen as a transparent overlay
+      await Navigator.of(context).push(RoadDetailsScreen.route(matchedRoad!.id));
+      if (mounted) setState(() => _isDetailsOpen = false);
       return;
     }
 
     // 2. Query Mapbox Geocoding API within Barangay Marulas bounding box
     final url = Uri.parse(
       'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'
-      '?access_token=pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTlldHMweDAyOGYzMnM3a202dWc1encifQ.3bSUr0nz6i29AtlnB2HlHw'
+      '?access_token=$_mapboxToken'
       '&proximity=120.9842,14.6761'
       '&limit=1'
     );
@@ -132,6 +208,8 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
               CameraOptions(
                 center: Point(coordinates: Position(lon, lat)),
                 zoom: 16.0,
+                pitch: 60.0,
+                bearing: -15.0,
               ),
               MapAnimationOptions(duration: 1500),
             );
@@ -156,6 +234,12 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
       }
     } catch (e) {
       debugPrint('[MapDashboard] Geocoding error: $e');
+      if (mounted) {
+        setState(() => _isSearching = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Network error: Could not connect to map service.')),
+        );
+      }
     }
   }
 
@@ -165,7 +249,20 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
 
     return ListenableBuilder(
       listenable: appState,
-      builder: (context, _) {
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: AppMap(
+              onMapCreatedCallback: _onMapCreated,
+              onRoadTapped: _handleRoadTapped,
+            ),
+          ),
+          const Positioned.fill(
+            child: WeatherMapOverlay(),
+          ),
+        ],
+      ),
+      builder: (context, child) {
         RoadStatus? selectedRoad;
         Color statusColor = AppColors.passable;
         IconData statusIcon = Icons.verified_user;
@@ -180,12 +277,14 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
             orElse: () => appState.roads.first,
           );
 
-          if (selectedRoad.status == 'partial') {
+          final effectiveStatus = selectedRoad.getEffectiveStatus(SimulatedWeatherService.instance.currentState);
+
+          if (effectiveStatus == 'partial') {
             statusColor = AppColors.partial;
             statusIcon = Icons.info;
             statusLabel = 'Partial Blockage';
             statusBgColor = AppColors.partial.withValues(alpha: 0.15);
-          } else if (selectedRoad.status == 'not_passable') {
+          } else if (effectiveStatus == 'not_passable') {
             statusColor = AppColors.notPassable;
             statusIcon = Icons.warning;
             statusLabel = 'Not Passable';
@@ -194,25 +293,14 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
         }
 
         return Scaffold(
-          body: Stack(
-            children: [
-              // Map background
-              Positioned.fill(
-                child: AppMap(
-                  onMapCreatedCallback: (map) {
-                    _mapboxMap = map;
-                  },
-                  routePoints: _isRoutePlanning && _routes.isNotEmpty ? _routes[_selectedRouteIndex].points : null,
-                ),
-              ),
+          body: SizedBox.expand(
+            child: Stack(
+              children: [
+              // Cached heavy map and weather layers
+              if (child != null) child,
 
-              // GPS pulse at center
-              Center(
-                child: _GPSPulse(),
-              ),
-
-              // Top header with search (Only shown if NOT route planning)
-              if (!_isRoutePlanning)
+              // Top header with search
+              if (!_isDetailsOpen)
                 SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -395,28 +483,118 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                                         ),
                                 ),
                                 const SizedBox(width: 12),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFEFF6FF),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      const Icon(Icons.thunderstorm,
-                                          size: 20, color: AppColors.primary),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        '28°C',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.primary,
-                                        ),
+                                ValueListenableBuilder<WeatherState>(
+                                  valueListenable: SimulatedWeatherService.instance.listenable,
+                                  builder: (context, weatherState, _) {
+                                    final weatherService = SimulatedWeatherService.instance;
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        color: weatherService.getWeatherColor(weatherState).withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(12),
                                       ),
-                                    ],
-                                  ),
+                                      child: Row(
+                                        children: [
+                                          Icon(weatherService.getWeatherIcon(weatherState),
+                                              size: 20, color: weatherService.getWeatherColor(weatherState)),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            weatherService.getWeatherDescription(weatherState),
+                                            style: GoogleFonts.inter(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: weatherService.getWeatherColor(weatherState),
+                                            ),
+                                          ),
+                                          if (weatherService.isDataStale) ...[
+                                            const SizedBox(width: 6),
+                                            const Icon(Icons.cloud_off, size: 14, color: AppColors.error),
+                                          ],
+                                          if (weatherState == WeatherState.heavyRain || weatherState == WeatherState.typhoon) ...[
+                                            const SizedBox(width: 8),
+                                            _BlinkingInfoIcon(
+                                              color: weatherService.getWeatherColor(weatherState),
+                                              onTap: () {
+                                                showDialog(
+                                                  context: context,
+                                                  builder: (context) {
+                                                    final isTyphoon = weatherState == WeatherState.typhoon;
+                                                    final color = weatherService.getWeatherColor(weatherState);
+                                                    final title = isTyphoon ? 'TYPHOON ALERT' : 'HEAVY RAIN ALERT';
+                                                    final sub = isTyphoon 
+                                                      ? 'Roads may be impassable. Seek safe shelter immediately.'
+                                                      : 'Flooding possible. Vulnerable roads may be auto-escalated.';
+
+                                                    return Dialog(
+                                                      backgroundColor: Colors.white,
+                                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                                                      child: Padding(
+                                                        padding: const EdgeInsets.all(24),
+                                                        child: Column(
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            Icon(
+                                                              isTyphoon ? Icons.cyclone_rounded : Icons.thunderstorm_outlined,
+                                                              size: 48,
+                                                              color: color,
+                                                            ),
+                                                            const SizedBox(height: 16),
+                                                            Text(
+                                                              title,
+                                                              style: GoogleFonts.inter(
+                                                                fontSize: 18,
+                                                                fontWeight: FontWeight.w800,
+                                                                letterSpacing: 1.2,
+                                                                color: AppColors.onSurface,
+                                                              ),
+                                                              textAlign: TextAlign.center,
+                                                            ),
+                                                            const SizedBox(height: 8),
+                                                            Text(
+                                                              sub,
+                                                              style: GoogleFonts.inter(
+                                                                fontSize: 14,
+                                                                fontWeight: FontWeight.w500,
+                                                                color: AppColors.onSurfaceVariant,
+                                                                height: 1.4,
+                                                              ),
+                                                              textAlign: TextAlign.center,
+                                                            ),
+                                                            const SizedBox(height: 24),
+                                                            SizedBox(
+                                                              width: double.infinity,
+                                                              child: ElevatedButton(
+                                                                style: ElevatedButton.styleFrom(
+                                                                  backgroundColor: color,
+                                                                  foregroundColor: Colors.white,
+                                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                                                  elevation: 0,
+                                                                ),
+                                                                onPressed: () => Navigator.of(context).pop(),
+                                                                child: Text(
+                                                                  'OK',
+                                                                  style: GoogleFonts.inter(
+                                                                    fontSize: 14,
+                                                                    fontWeight: FontWeight.bold,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                );
+                                              },
+                                            ),
+                                          ]
+                                        ],
+                                      ),
+                                    );
+                                  }
                                 ),
                               ],
                             ),
@@ -427,231 +605,11 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                   ),
                 ),
 
-              // Route Entry Panel (Shown if Route Planning is Active)
-              if (_isRoutePlanning)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: SafeArea(
-                      bottom: false,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.arrow_back, color: AppColors.primary),
-                                  onPressed: exitRoutePlanningMode,
-                                ),
-                                Text(
-                                  'Plan Safest Route',
-                                  style: GoogleFonts.manrope(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Dot connector
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 16),
-                                  child: Column(
-                                    children: [
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: const BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: AppColors.primary,
-                                        ),
-                                      ),
-                                      Container(
-                                        width: 1.5,
-                                        height: 48,
-                                        color: AppColors.outlineVariant,
-                                      ),
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: const BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: AppColors.error,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                // Inputs
-                                Expanded(
-                                  child: Column(
-                                    children: [
-                                      // From: Current Location
-                                      Container(
-                                        width: double.infinity,
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.surfaceContainerHighest,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              'Current Location',
-                                              style: GoogleFonts.inter(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w500,
-                                                color: AppColors.onSurface,
-                                              ),
-                                            ),
-                                            const Icon(Icons.my_location, size: 14, color: AppColors.primary),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      // To: Search destination
-                                      Container(
-                                        decoration: BoxDecoration(
-                                          color: AppColors.surfaceContainerHighest,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: TextField(
-                                          controller: _destinationController,
-                                          focusNode: _destinationFocus,
-                                          style: GoogleFonts.inter(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w500,
-                                            color: AppColors.onSurface,
-                                          ),
-                                          decoration: InputDecoration(
-                                            hintText: 'Search destination...',
-                                            hintStyle: GoogleFonts.inter(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w400,
-                                              color: AppColors.outline,
-                                            ),
-                                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                            border: InputBorder.none,
-                                            isDense: true,
-                                            suffixIcon: _destinationController.text.isNotEmpty
-                                                ? GestureDetector(
-                                                    child: const Icon(Icons.clear, size: 14),
-                                                    onTap: () {
-                                                      _destinationController.clear();
-                                                      setState(() {
-                                                        _suggestions.clear();
-                                                        _routes.clear();
-                                                        _destinationPoint = null;
-                                                        _routeErrorMessage = null;
-                                                      });
-                                                    },
-                                                  )
-                                                : null,
-                                          ),
-                                          onChanged: _onDestinationChanged,
-                                          onSubmitted: (value) async {
-                                            if (_suggestions.isNotEmpty) {
-                                              final suggestion = _suggestions.first;
-                                              final center = suggestion['center'] as List;
-                                              final lon = (center[0] as num).toDouble();
-                                              final lat = (center[1] as num).toDouble();
-                                              _selectDestination(suggestion['place_name'], lon, lat);
-                                            } else if (value.trim().isNotEmpty) {
-                                              setState(() {
-                                                _isRouteLoading = true;
-                                                _routeErrorMessage = null;
-                                              });
-                                              await _onDestinationChanged(value);
-                                              if (_suggestions.isNotEmpty) {
-                                                final suggestion = _suggestions.first;
-                                                final center = suggestion['center'] as List;
-                                                final lon = (center[0] as num).toDouble();
-                                                final lat = (center[1] as num).toDouble();
-                                                _selectDestination(suggestion['place_name'], lon, lat);
-                                              } else {
-                                                setState(() {
-                                                  _routeErrorMessage = 'No location found for "$value". Try another search.';
-                                                  _isRouteLoading = false;
-                                                });
-                                              }
-                                            }
-                                          },
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (_suggestions.isNotEmpty)
-                              Container(
-                                margin: const EdgeInsets.only(top: 8, left: 20),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.08),
-                                      blurRadius: 16,
-                                    ),
-                                  ],
-                                ),
-                                child: ListView.builder(
-                                  shrinkWrap: true,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  itemCount: _suggestions.length,
-                                  itemBuilder: (context, idx) {
-                                    final suggestion = _suggestions[idx];
-                                    return ListTile(
-                                      dense: true,
-                                      title: Text(
-                                        suggestion['place_name'],
-                                        style: GoogleFonts.inter(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                      onTap: () {
-                                        final center = suggestion['center'] as List;
-                                        final lon = (center[0] as num).toDouble();
-                                        final lat = (center[1] as num).toDouble();
-                                        _selectDestination(suggestion['place_name'], lon, lat);
-                                      },
-                                    );
-                                  },
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
               // Legend overlay
-              Positioned(
-                top: _isRoutePlanning ? 240 : 200,
-                right: 16,
+              if (!_isDetailsOpen)
+                Positioned(
+                  top: 200,
+                  right: 16,
                 child: Container(
                   padding: const EdgeInsets.all(16),
                   width: 180,
@@ -690,8 +648,7 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                 ),
               ),
 
-              // Fullscreen FAB (Only show when NOT route planning)
-              if (!_isRoutePlanning)
+              // Fullscreen FAB
                 Positioned(
                   bottom: 226,
                   right: 24,
@@ -729,10 +686,39 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                   ),
                 ),
 
-
+              // Locate Me FAB
+                Positioned(
+                  bottom: 298,
+                  right: 24,
+                  child: GestureDetector(
+                    onTap: _flyToMyLocation,
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                        border: Border.all(
+                          color: AppColors.outlineVariant.withValues(alpha: 0.2),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.my_location,
+                        size: 28,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                ),
 
               // Emergency FAB (Only show when NOT route planning)
-              if (!_isRoutePlanning)
                 Positioned(
                   bottom: 154,
                   right: 24,
@@ -768,24 +754,22 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                 ),
 
               // Dynamic Status card (Only show when NOT route planning)
-              if (!_isRoutePlanning && appState.roads.isNotEmpty && selectedRoad != null)
+              if (!_isDetailsOpen && appState.roads.isNotEmpty && selectedRoad != null)
                 Positioned(
                   bottom: 16,
                   left: 16,
                   right: 16,
                   child: GestureDetector(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => RoadDetailsScreen(roadId: selectedRoad!.id),
-                        ),
-                      );
+                    onTap: () async {
+                      setState(() => _isDetailsOpen = true);
+                      await Navigator.of(context).push(RoadDetailsScreen.route(selectedRoad!.id));
+                      if (mounted) setState(() => _isDetailsOpen = false);
                     },
                     child: Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.95),
-                        borderRadius: BorderRadius.circular(40),
+                        borderRadius: BorderRadius.circular(24),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withValues(alpha: 0.08),
@@ -799,20 +783,6 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                       ),
                       child: Row(
                         children: [
-                          Container(
-                            width: 56,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              color: statusBgColor,
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            child: Icon(
-                              statusIcon,
-                              size: 28,
-                              color: statusColor,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -827,8 +797,8 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  selectedRoad.notes.isEmpty
-                                      ? 'No active obstructions reported.'
+                                  (selectedRoad.notes.isEmpty || selectedRoad.notes == 'Imported from OSM')
+                                      ? 'No recent reports'
                                       : selectedRoad.notes,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -842,27 +812,32 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          Column(
-                            children: [
-                              Text(
-                                statusLabel.toUpperCase(),
-                                style: GoogleFonts.inter(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.5,
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: statusColor.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  statusIcon,
+                                  size: 24,
                                   color: statusColor,
                                 ),
-                              ),
-                              const SizedBox(height: 4),
-                              Container(
-                                width: 12,
-                                height: 12,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: statusColor,
+                                const SizedBox(height: 4),
+                                Text(
+                                  statusLabel.toUpperCase(),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.5,
+                                    color: statusColor,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -870,353 +845,53 @@ class MapDashboardScreenState extends State<MapDashboardScreen> {
                   ),
                 ),
 
-              // Route details Loader (Only show when Route Planning is loading)
-              if (_isRoutePlanning && _isRouteLoading)
-                Positioned(
-                  bottom: 32,
-                  left: 16,
-                  right: 16,
-                  child: Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 32,
-                        ),
-                      ],
-                    ),
-                    child: const Center(
-                      child: CircularProgressIndicator(color: AppColors.primary),
-                    ),
-                  ),
-                ),
-
-              // Route details Error Card (Only show when Route Planning has errors)
-              if (_isRoutePlanning && _routeErrorMessage != null && !_routeErrorMessage!.startsWith('Warning:'))
-                Positioned(
-                  bottom: 32,
-                  left: 16,
-                  right: 16,
-                  child: Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: AppColors.error.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: AppColors.error.withValues(alpha: 0.2)),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _routeErrorMessage!,
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.error,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
-                          onPressed: _calculateRoute,
-                          child: const Text('Retry', style: TextStyle(color: Colors.white)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              // Route details Warning alert (displayed above route card if route found with warnings)
-              if (_isRoutePlanning && _routeErrorMessage != null && _routeErrorMessage!.startsWith('Warning:'))
-                Positioned(
-                  bottom: _routes.isNotEmpty ? 290 : 32,
-                  left: 16,
-                  right: 16,
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange, width: 1.5),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.warning, color: Colors.orange, size: 20),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _routeErrorMessage!,
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.orange.shade800,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              // Integrated Route details Sheet/Card (Shown if routes are successfully planned)
-              if (_isRoutePlanning && !_isRouteLoading && _routes.isNotEmpty)
-                Positioned(
-                  bottom: 16,
-                  left: 16,
-                  right: 16,
-                  child: Builder(
-                    builder: (context) {
-                      final selectedRoute = _routes[_selectedRouteIndex];
-                      
-                      String safestRouteSubtitle = 'Route is clear. Bypasses all active blocks.';
-                      Color safestBorderColor = AppColors.secondary.withValues(alpha: 0.1);
-                      Color safestBgColor = AppColors.secondary.withValues(alpha: 0.05);
-                      Color safestTextColor = AppColors.onSecondaryContainer;
-                      IconData safestIcon = Icons.check_circle;
-
-                      if (selectedRoute.safetyStatus == 'partial') {
-                        safestRouteSubtitle = 'Caution: Partial flooding reported.';
-                        safestBorderColor = AppColors.partial.withValues(alpha: 0.2);
-                        safestBgColor = AppColors.partial.withValues(alpha: 0.05);
-                        safestTextColor = AppColors.partial;
-                        safestIcon = Icons.info;
-                      } else if (selectedRoute.safetyStatus == 'not_passable') {
-                        safestRouteSubtitle = 'Warning: Flooded/blocked streets on path!';
-                        safestBorderColor = AppColors.notPassable.withValues(alpha: 0.2);
-                        safestBgColor = AppColors.notPassable.withValues(alpha: 0.05);
-                        safestTextColor = AppColors.notPassable;
-                        safestIcon = Icons.warning;
-                      } else if (selectedRoute.avoidedRoads.isNotEmpty) {
-                        safestRouteSubtitle = 'Bypasses ${selectedRoute.avoidedRoads.length} flood-prone areas: ${selectedRoute.avoidedRoads.join(", ")}';
-                        safestBorderColor = AppColors.secondary.withValues(alpha: 0.2);
-                        safestBgColor = AppColors.secondary.withValues(alpha: 0.05);
-                        safestTextColor = AppColors.primary;
-                        safestIcon = Icons.shield;
-                      }
-
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.95),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.08),
-                              blurRadius: 24,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                          border: Border.all(
-                            color: safestBorderColor,
-                            width: 2,
-                          ),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: AppColors.secondaryContainer,
-                                                borderRadius: BorderRadius.circular(100),
-                                              ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(
-                                                    selectedRoute.safetyStatus == 'safe' ? Icons.verified_user : Icons.warning_amber_rounded,
-                                                    size: 12,
-                                                    color: AppColors.onSecondaryContainer,
-                                                  ),
-                                                  const SizedBox(width: 4),
-                                                  Text(
-                                                    selectedRoute.safetyStatus == 'safe' ? 'SAFEST ROUTE' : 'CAUTION REQUIRED',
-                                                    style: GoogleFonts.inter(
-                                                      fontSize: 10,
-                                                      fontWeight: FontWeight.w700,
-                                                      letterSpacing: 1.2,
-                                                      color: AppColors.onSecondaryContainer,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            const SizedBox(height: 6),
-                                            Text(
-                                              selectedRoute.summary,
-                                              style: GoogleFonts.manrope(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w700,
-                                                color: AppColors.onSurface,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        children: [
-                                          Text(
-                                            '${selectedRoute.durationMin} min',
-                                            style: GoogleFonts.manrope(
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.w800,
-                                              letterSpacing: -0.5,
-                                              color: AppColors.onSurface,
-                                            ),
-                                          ),
-                                          Text(
-                                            '${selectedRoute.distanceMiles.toStringAsFixed(1)} miles',
-                                            style: GoogleFonts.inter(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w500,
-                                              color: Colors.grey.shade500,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: safestBgColor,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(safestIcon, size: 16, color: safestTextColor),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            safestRouteSubtitle,
-                                            style: GoogleFonts.inter(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w500,
-                                              color: safestTextColor,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  
-                                  // Alternatives trigger if there are more than 1 routes
-                                  if (_routes.length > 1) ...[
-                                    const SizedBox(height: 12),
-                                    SizedBox(
-                                      height: 36,
-                                      child: ListView.builder(
-                                        scrollDirection: Axis.horizontal,
-                                        itemCount: _routes.length,
-                                        itemBuilder: (context, idx) {
-                                          final isSelected = idx == _selectedRouteIndex;
-                                          final route = _routes[idx];
-                                          return Padding(
-                                            padding: const EdgeInsets.only(right: 8),
-                                            child: ChoiceChip(
-                                              label: Text('${route.summary} (${route.durationMin}m)'),
-                                              selected: isSelected,
-                                              selectedColor: AppColors.primaryContainer,
-                                              labelStyle: GoogleFonts.inter(
-                                                fontSize: 11,
-                                                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                                                color: isSelected ? AppColors.onPrimaryContainer : AppColors.onSurfaceVariant,
-                                              ),
-                                              onSelected: (selected) {
-                                                if (selected) {
-                                                  setState(() {
-                                                    _selectedRouteIndex = idx;
-                                                  });
-                                                }
-                                              },
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            // Start navigation button
-                            ClipRRect(
-                              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
-                              child: Container(
-                                width: double.infinity,
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [AppColors.primary, AppColors.primaryContainer],
-                                  ),
-                                ),
-                                child: Material(
-                                  color: Colors.transparent,
-                                  child: InkWell(
-                                    onTap: () {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            selectedRoute.safetyStatus == 'safe'
-                                                ? 'Navigation started on ${selectedRoute.summary}.'
-                                                : 'Warning: Starting navigation on a route with flood warnings.',
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 16),
-                                      child: Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            'Start Navigation',
-                                            style: GoogleFonts.inter(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w700,
-                                              color: Colors.white,
-                                              letterSpacing: 0.5,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          const Icon(Icons.navigation, size: 18, color: Colors.white),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
             ],
           ),
-        );
+        ),
+      );
       },
+    );
+  }
+}
+
+class _BlinkingInfoIcon extends StatefulWidget {
+  final Color color;
+  final VoidCallback onTap;
+  
+  const _BlinkingInfoIcon({required this.color, required this.onTap});
+
+  @override
+  State<_BlinkingInfoIcon> createState() => _BlinkingInfoIconState();
+}
+
+class _BlinkingInfoIconState extends State<_BlinkingInfoIcon> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (_, _) {
+          return Opacity(
+            opacity: 0.3 + (_ctrl.value * 0.7),
+            child: Icon(Icons.info_outline, color: widget.color, size: 20),
+          );
+        }
+      ),
     );
   }
 }
@@ -1262,72 +937,3 @@ class _LegendItem extends StatelessWidget {
     );
   }
 }
-
-class _GPSPulse extends StatefulWidget {
-  @override
-  State<_GPSPulse> createState() => _GPSPulseState();
-}
-
-class _GPSPulseState extends State<_GPSPulse>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2000),
-    )..repeat();
-    _animation = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (context, child) {
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            // Ping
-            Container(
-              width: 40 + (20 * _animation.value),
-              height: 40 + (20 * _animation.value),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primary
-                    .withValues(alpha: 0.3 * (1 - _animation.value)),
-              ),
-            ),
-            // Dot
-            Container(
-              width: 20,
-              height: 20,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primary,
-                border: Border.all(color: Colors.white, width: 4),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-

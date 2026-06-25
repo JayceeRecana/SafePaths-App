@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/app_state_service.dart';
 
 class AdminBottomNavBar extends StatelessWidget {
   final int currentIndex;
@@ -31,43 +32,48 @@ class AdminBottomNavBar extends StatelessWidget {
         top: false,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _NavItem(
-                icon: Icons.dashboard_outlined,
-                activeIcon: Icons.dashboard,
-                label: 'DASHBOARD',
-                isActive: currentIndex == 0,
-                onTap: () => onTap(0),
-                hasNotification: false,
+          child: ListenableBuilder(
+            listenable: AppStateService.instance,
+            builder: (context, _) {
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _NavItem(
+                        icon: Icons.dashboard_outlined,
+                        activeIcon: Icons.dashboard,
+                        label: 'DASHBOARD',
+                        isActive: currentIndex == 0,
+                        onTap: () => onTap(0),
+                        hasNotification: false,
+                      ),
+                      _NavItem(
+                        icon: Icons.route_outlined,
+                        activeIcon: Icons.route,
+                        label: 'ROADS',
+                        isActive: currentIndex == 1,
+                        onTap: () => onTap(1),
+                        hasNotification: false,
+                      ),
+                      _NavItem(
+                        icon: Icons.notifications_outlined,
+                        activeIcon: Icons.notifications,
+                        label: 'ALERTS',
+                        isActive: currentIndex == 2,
+                        onTap: () => onTap(2),
+                        hasNotification: AppStateService.instance.alerts.isNotEmpty,
+                      ),
+                      _NavItem(
+                        icon: Icons.description_outlined,
+                        activeIcon: Icons.description,
+                        label: 'REPORTS',
+                        isActive: currentIndex == 3,
+                        onTap: () => onTap(3),
+                        hasNotification: AppStateService.instance.reports.any((r) => r.status == 'pending'),
+                      ),
+                    ],
+                  );
+                }
               ),
-              _NavItem(
-                icon: Icons.route_outlined,
-                activeIcon: Icons.route,
-                label: 'ROADS',
-                isActive: currentIndex == 1,
-                onTap: () => onTap(1),
-                hasNotification: false,
-              ),
-              _NavItem(
-                icon: Icons.campaign_outlined,
-                activeIcon: Icons.campaign,
-                label: 'ALERTS',
-                isActive: currentIndex == 2,
-                onTap: () => onTap(2),
-                hasNotification: true,
-              ),
-              _NavItem(
-                icon: Icons.description_outlined,
-                activeIcon: Icons.description,
-                label: 'REPORTS',
-                isActive: currentIndex == 3,
-                onTap: () => onTap(3),
-                hasNotification: false,
-              ),
-            ],
-          ),
         ),
       ),
     );

@@ -5,13 +5,15 @@ import '../../widgets/app_top_bar.dart';
 import '../../services/app_state_service.dart';
 
 class BroadcastAlertScreen extends StatefulWidget {
-  const BroadcastAlertScreen({super.key});
+  final bool isStandalone;
+  const BroadcastAlertScreen({super.key, this.isStandalone = false});
 
   @override
   State<BroadcastAlertScreen> createState() => _BroadcastAlertScreenState();
 }
 
 class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
+  final ScrollController _scrollController = ScrollController();
   final _titleController = TextEditingController();
   final _messageController = TextEditingController();
   int _severity = 1;
@@ -19,6 +21,7 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _titleController.dispose();
     _messageController.dispose();
     super.dispose();
@@ -29,34 +32,38 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
     return Scaffold(
       appBar: AppTopBar(
         title: 'Broadcast Alert',
-        showBackButton: true,
+        showBackButton: widget.isStandalone,
         showProfile: false,
         showSettingsAction: false,
-        onBackPressed: () => Navigator.of(context).pop(),
+        onBackPressed: widget.isStandalone ? () {
+          if (Navigator.canPop(context)) Navigator.pop(context);
+        } : null,
       ),
       backgroundColor: AppColors.surface,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+        controller: _scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               'PUBLIC WARNING',
               style: GoogleFonts.inter(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 2.0,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2.5,
                 color: AppColors.tertiary,
               ),
             ),
             const SizedBox(height: 6),
             Text(
-              'Emergency Alert Composer',
+              'Emergency Alert\nComposer',
               style: GoogleFonts.manrope(
-                fontSize: 24,
+                fontSize: 32,
                 fontWeight: FontWeight.w800,
-                letterSpacing: -0.4,
+                letterSpacing: -0.8,
                 color: AppColors.onSurface,
+                height: 1.15,
               ),
             ),
             const SizedBox(height: 18),
@@ -76,6 +83,42 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _label('QUICK TEMPLATES'),
+                      GestureDetector(
+                        onTap: () => _showAddTemplateDialog(context),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.add_circle_outline, size: 14, color: AppColors.primary),
+                            const SizedBox(width: 4),
+                            Text('Custom', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ListenableBuilder(
+                      listenable: AppStateService.instance,
+                      builder: (context, _) {
+                        final templates = AppStateService.instance.templates;
+                        return Row(
+                          children: [
+                            for (var t in templates) ...[
+                              _buildTemplateChip(t.label, t.title, t.message, t.severity),
+                              const SizedBox(width: 8),
+                            ],
+                          ],
+                        );
+                      }
+                    ),
+                  ),
+                  const SizedBox(height: 24),
                   _label('ALERT TITLE'),
                   const SizedBox(height: 8),
                   TextField(
@@ -209,17 +252,165 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
     if (_severity == 0) severityText = 'Advisory';
     if (_severity == 2) severityText = 'Critical';
 
-    await AppStateService.instance.broadcastAlert(title, message, severityText);
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Confirm Broadcast', style: GoogleFonts.manrope(fontWeight: FontWeight.w700)),
+          content: const Text('Are you sure you want to broadcast this alert to all active users? This action cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                
+                await AppStateService.instance.broadcastAlert(title, message, severityText);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alert sent to all active users.')),
-      );
-      // Only pop when pushed as a route — not when used as the Alerts tab.
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
-    }
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Alert sent to all active users.')),
+                  );
+                  if (Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.tertiary, foregroundColor: Colors.white),
+              child: const Text('Broadcast Now'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildTemplateChip(String label, String title, String message, int severity) {
+    return ActionChip(
+      label: Text(label, style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+      backgroundColor: AppColors.surfaceContainerHigh,
+      side: BorderSide.none,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      onPressed: () {
+        setState(() {
+          _titleController.text = title;
+          _messageController.text = message;
+          _severity = severity;
+        });
+      },
+    );
+  }
+
+  void _showAddTemplateDialog(BuildContext context) {
+    final labelCtrl = TextEditingController();
+    final titleCtrl = TextEditingController();
+    final messageCtrl = TextEditingController();
+    int tempSeverity = 1;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              backgroundColor: Colors.white,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+              title: Text('New Custom Template', style: GoogleFonts.manrope(fontWeight: FontWeight.w800)),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width: MediaQuery.of(context).size.width, // Force dialog to expand to max width allowed by insetPadding
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                    TextField(
+                      controller: labelCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Short Label (e.g. Typhoon)',
+                        filled: true,
+                        fillColor: AppColors.surfaceContainerLow,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: titleCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Alert Title',
+                        filled: true,
+                        fillColor: AppColors.surfaceContainerLow,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: messageCtrl,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        labelText: 'Alert Message',
+                        filled: true,
+                        fillColor: AppColors.surfaceContainerLow,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<int>(
+                      value: tempSeverity,
+                      decoration: InputDecoration(
+                        labelText: 'Severity',
+                        filled: true,
+                        fillColor: AppColors.surfaceContainerLow,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 0, child: Text('Advisory')),
+                        DropdownMenuItem(value: 1, child: Text('Warning')),
+                        DropdownMenuItem(value: 2, child: Text('Critical')),
+                      ],
+                      onChanged: (val) => setDialogState(() => tempSeverity = val ?? 1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('Cancel', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (labelCtrl.text.isNotEmpty && titleCtrl.text.isNotEmpty) {
+                      AppStateService.instance.addAlertTemplate(
+                        AlertTemplate(
+                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                          label: labelCtrl.text,
+                          title: titleCtrl.text,
+                          message: messageCtrl.text,
+                          severity: tempSeverity,
+                        ),
+                      );
+                      Navigator.of(context).pop();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    elevation: 0,
+                  ),
+                  child: Text('Save Template', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                ),
+              ],
+            );
+          }
+        );
+      },
+    );
   }
 }
 
@@ -262,4 +453,4 @@ class _SeverityChip extends StatelessWidget {
       ),
     );
   }
-}
+}

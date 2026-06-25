@@ -1,18 +1,28 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 enum UserRole { user, admin }
 
 class UserService {
   static const String _roleKey = 'user_role';
-  static const String _isLoggedInKey = 'is_logged_in';
 
-  // Save user role
+  // Get the true Firebase UID
+  static Future<String> getUserId() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      return user.uid;
+    }
+    // Fallback for unauthorized guest reports
+    return 'anonymous';
+  }
+
+  // Save user role locally for quick UI routing
   static Future<void> saveUserRole(UserRole role) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_roleKey, role.toString());
   }
 
-  // Get user role
+  // Get locally cached user role
   static Future<UserRole?> getUserRole() async {
     final prefs = await SharedPreferences.getInstance();
     final roleString = prefs.getString(_roleKey);
@@ -23,22 +33,18 @@ class UserService {
     );
   }
 
-  // Save login state
   static Future<void> setLoggedIn(bool isLoggedIn) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_isLoggedInKey, isLoggedIn);
+    // Firebase Auth automatically manages session state.
+    // We don't need to manually store boolean login state anymore.
   }
 
-  // Get login state
   static Future<bool> isLoggedIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_isLoggedInKey) ?? false;
+    return FirebaseAuth.instance.currentUser != null;
   }
 
-  // Clear user data (logout)
   static Future<void> clearUserData() async {
+    await FirebaseAuth.instance.signOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_roleKey);
-    await prefs.remove(_isLoggedInKey);
   }
 }
