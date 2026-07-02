@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/app_state_service.dart';
 import '../services/user_service.dart';
 import '../../services/location_service.dart';
@@ -33,7 +34,7 @@ class AppMapState extends State<AppMap> {
   bool _isDrawing = false;
   bool _drawPending = false;
  
-  static const String _publicToken = String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg');
+  static final String _publicToken = dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '';
  
   @override
   void initState() {

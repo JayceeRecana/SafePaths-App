@@ -6,11 +6,13 @@ import 'screens/shared/splash_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 bool firebaseInitFailed = false;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   debugPrint("Initializing Firebase...");
   try {
     await Firebase.initializeApp(
@@ -30,7 +32,7 @@ void main() async {
     ),
   );
   
-  MapboxOptions.setAccessToken(const String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg'));
+  MapboxOptions.setAccessToken(dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '');
   
   debugPrint("Running app...");
   runApp(const SafePathsApp());

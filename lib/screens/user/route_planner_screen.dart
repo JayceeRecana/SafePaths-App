@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' hide Size;
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_map.dart';
 import '../../widgets/app_top_bar.dart';
@@ -36,7 +37,7 @@ class _RoutePlannerScreenState extends State<RoutePlannerScreen> {
   bool _isSearching = false;
 
   // Retrieve the mapbox token from environment
-  final String _mapboxToken = const String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg');
+  final String _mapboxToken = dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '';
 
   @override
   void initState() {

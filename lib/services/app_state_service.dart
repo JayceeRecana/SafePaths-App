@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:math' show cos, sqrt, asin, sin, min;
 import 'dart:async';
@@ -134,7 +135,8 @@ class RoadStatus {
     
     if (effectiveStatus == 'passable' && isSevereWeather) {
       final hoursOld = DateTime.now().difference(updatedAt).inMinutes / 60.0;
-      if (hoursOld > RiskConfig.passableStaleThresholdHours) {
+      final staleThreshold = RiskConfig.getPassableStaleThresholdHours(vulnerability);
+      if (hoursOld > staleThreshold) {
         if (vulnerability == 'high') {
           effectiveStatus = 'not_passable';
         } else if (vulnerability == 'medium') {
@@ -576,7 +578,8 @@ class AppStateService extends ChangeNotifier {
     
     double weatherMultiplier = 0.0;
     switch (weatherState) {
-      case WeatherState.clear: weatherMultiplier = 0.0; break;
+      case WeatherState.clear:
+      case WeatherState.partlyCloudy: weatherMultiplier = 0.0; break;
       case WeatherState.lightRain: weatherMultiplier = 0.2; break;
       case WeatherState.moderateRain: weatherMultiplier = 0.4; break;
       case WeatherState.heavyRain: weatherMultiplier = 0.7; break;
@@ -731,7 +734,9 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
   List<UserProfile> get users => _users;
   List<SystemActionLog> get systemLogs => List.unmodifiable(_systemLogs);
 
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  bool get _useMock => Firebase.apps.isEmpty;
+  FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
 
   double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     var p = 0.017453292519943295;
@@ -794,6 +799,27 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
       await sub.cancel();
     }
     _subscriptions.clear();
+
+    if (_useMock) {
+      _roads = [
+        RoadStatus(id: 'macarthur', name: 'MacArthur Highway', status: 'not_passable', notes: 'Flooded', updatedAt: DateTime.now()),
+        RoadStatus(id: 'rizal', name: 'Rizal Ave', status: 'passable', notes: 'Clear', updatedAt: DateTime.now()),
+        RoadStatus(id: 'mh_del_pilar', name: 'M.H. Del Pilar', status: 'passable', notes: 'Clear', updatedAt: DateTime.now()),
+        RoadStatus(id: 'karuhatan', name: 'Karuhatan Road', status: 'passable', notes: 'Clear', updatedAt: DateTime.now()),
+      ];
+      _reports = [
+        UserReport(id: 'r1', title: 'Flooding Rizal', description: 'Water level high', createdAt: DateTime.now(), severity: 'High', status: 'pending', userId: 'mock_user'),
+        UserReport(id: 'r2', title: 'Debris MacArthur', description: 'Debris on road', createdAt: DateTime.now(), severity: 'Medium', status: 'pending', userId: 'mock_user'),
+        UserReport(id: 'r3', title: 'Traffic Karuhatan', description: 'Heavy traffic', createdAt: DateTime.now(), severity: 'Low', status: 'pending', userId: 'mock_user'),
+      ];
+      _alerts = [
+        BroadcastAlert(id: 'a1', title: 'Weather Advisory', message: 'Heavy rain expected', severity: 'Advisory', category: 'WEATHER UPDATE', createdAt: DateTime.now()),
+        BroadcastAlert(id: 'a2', title: 'Flood Warning', message: 'Avoid low areas', severity: 'Warning', category: 'EMERGENCY', createdAt: DateTime.now()),
+        BroadcastAlert(id: 'a3', title: 'System Alert', message: 'System maintenance', severity: 'Critical', category: 'SYSTEM', createdAt: DateTime.now()),
+      ];
+      notifyListeners();
+      return;
+    }
 
     try {
       await _loadEscalationTimestamps();
@@ -1009,16 +1035,36 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
     String? name,
     String? vulnerability,
   }) async {
+    if (_useMock) {
+      final index = _roads.indexWhere((r) => r.id == roadId);
+      if (index != -1) {
+        _roads[index] = _roads[index].copyWith(
+          status: status,
+          notes: notes,
+          updatedAt: DateTime.now(),
+        );
+      } else {
+        _roads.add(RoadStatus(
+          id: roadId,
+          name: name ?? roadId,
+          status: status,
+          notes: notes,
+          updatedAt: DateTime.now(),
+          geometry: geometry,
+        ));
+      }
+      notifyListeners();
+      return;
+    }
+
     final uid = await UserService.getUserId();
     String userName = 'Unknown';
-    if (uid != 'anonymous') {
-      try {
-        final userDoc = await _db.collection('users').doc(uid).get();
-        if (userDoc.exists) {
-          userName = userDoc.data()?['name'] ?? 'Unknown Admin';
-        }
-      } catch (_) {}
-    }
+    try {
+      final userDoc = await _db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        userName = userDoc.data()?['name'] ?? 'Unknown Admin';
+      }
+    } catch (_) {}
 
     final Map<String, dynamic> data = {
       'status': status,
@@ -1048,14 +1094,12 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
   }) async {
     final uid = await UserService.getUserId();
     String userName = 'Unknown';
-    if (uid != 'anonymous') {
-      try {
-        final userDoc = await _db.collection('users').doc(uid).get();
-        if (userDoc.exists) {
-          userName = userDoc.data()?['name'] ?? 'Unknown Admin';
-        }
-      } catch (_) {}
-    }
+    try {
+      final userDoc = await _db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        userName = userDoc.data()?['name'] ?? 'Unknown Admin';
+      }
+    } catch (_) {}
 
     final Map<String, dynamic> data = {
       'status': status,
@@ -1081,42 +1125,40 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
   }
 
   Future<void> submitReport(String title, String description, String floodLevel, [String? roadId, Map<String, dynamic>? location]) async {
+    if (_useMock) {
+      _reports.insert(0, UserReport(
+        id: 'mock_report_${DateTime.now().millisecondsSinceEpoch}',
+        title: title,
+        description: description,
+        createdAt: DateTime.now(),
+        severity: floodLevel,
+        status: 'pending',
+        userId: 'mock_user',
+      ));
+      notifyListeners();
+      return;
+    }
+
     final uid = await UserService.getUserId();
     
-    if (uid == 'anonymous') {
-      final prefs = await SharedPreferences.getInstance();
-      final prefKey = 'lastReportTime_anonymous_device';
-      final lastTimeStr = prefs.getString(prefKey);
-      if (lastTimeStr != null) {
-        final lastTime = DateTime.parse(lastTimeStr);
+    final userRef = _db.collection('users').doc(uid);
+    final userDoc = await userRef.get();
+    if (userDoc.exists) {
+      final lastReportAt = userDoc.data()?['lastReportAt'];
+      if (lastReportAt != null) {
+        final lastTime = (lastReportAt as Timestamp).toDate();
         if (DateTime.now().difference(lastTime).inMinutes < 5) {
           throw Exception('SPAM_COOLDOWN');
         }
       }
-      await prefs.setString(prefKey, DateTime.now().toIso8601String());
-    } else {
-      final userRef = _db.collection('users').doc(uid);
-      final userDoc = await userRef.get();
-      if (userDoc.exists) {
-        final lastReportAt = userDoc.data()?['lastReportAt'];
-        if (lastReportAt != null) {
-          final lastTime = (lastReportAt as Timestamp).toDate();
-          if (DateTime.now().difference(lastTime).inMinutes < 5) {
-            throw Exception('SPAM_COOLDOWN');
-          }
-        }
-      }
-      await userRef.update({'lastReportAt': FieldValue.serverTimestamp()});
     }
+    await userRef.set({'lastReportAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
     
     // Fetch actual trust score (authority)
     double authority = 50.0;
     try {
-      if (uid != 'anonymous') {
-        final doc = await _db.collection('users').doc(uid).get();
-        if (doc.exists) {
-          authority = (doc.data()?['trustScore'] as num?)?.toDouble() ?? 50.0;
-        }
+      if (userDoc.exists) {
+        authority = (userDoc.data()?['trustScore'] as num?)?.toDouble() ?? 50.0;
       }
     } catch (_) {}
 
@@ -1137,6 +1179,7 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
       try {
         final existing = _reports.firstWhere(
             (r) => r.userId == uid && r.roadId == roadId && r.status == 'pending');
+        // If found, update it. If update fails, it will NOT be caught here, letting the error bubble up to UI!
         await _db.collection('reports').doc(existing.id).update({
           'severity': floodLevel,
           'description': description,
@@ -1144,8 +1187,8 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
           'lastUpdatedByUser': FieldValue.serverTimestamp(),
         }).timeout(const Duration(seconds: 10), onTimeout: () => throw Exception('Unable to connect. Please check your internet connection.'));
         return; // Exit, we don't want to create a duplicate
-      } catch (e) {
-        // No existing pending report found, continue to create a new one
+      } on StateError {
+        // No existing pending report found for this specific user/device. Continue to create a new one!
       }
     }
 
@@ -1203,8 +1246,6 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
   }
 
   Future<void> _updateUserReputation(String uid, int pointChange, bool isVerified) async {
-    if (uid == 'anonymous') return;
-    
     final docRef = _db.collection('users').doc(uid);
     final doc = await docRef.get();
     
@@ -1269,6 +1310,25 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
   }
 
   Future<void> broadcastAlert(String title, String message, String severity) async {
+    if (_useMock) {
+      String category = 'EMERGENCY';
+      if (severity == 'Advisory') {
+        category = 'WEATHER UPDATE';
+      } else if (severity == 'Warning') {
+        category = 'SYSTEM';
+      }
+      _alerts.insert(0, BroadcastAlert(
+        id: 'mock_alert_${DateTime.now().millisecondsSinceEpoch}',
+        title: title,
+        message: message,
+        severity: severity,
+        category: category,
+        createdAt: DateTime.now(),
+      ));
+      notifyListeners();
+      return;
+    }
+
     String category = 'EMERGENCY';
     if (severity == 'Advisory') {
       category = 'WEATHER UPDATE';
@@ -1278,14 +1338,12 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
 
     final uid = await UserService.getUserId();
     String userName = 'System';
-    if (uid != 'anonymous') {
-      try {
-        final userDoc = await _db.collection('users').doc(uid).get();
-        if (userDoc.exists) {
-          userName = userDoc.data()?['name'] ?? 'System';
-        }
-      } catch (_) {}
-    }
+    try {
+      final userDoc = await _db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        userName = userDoc.data()?['name'] ?? 'System';
+      }
+    } catch (_) {}
 
     await _db.collection('alerts').add({
       'title': title,
@@ -1390,8 +1448,6 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
       // Robust Troll Filter: Only count the most recent report per user within a 30-min window
       Map<String, UserReport> uniqueUserReports = {};
       for (var other in otherReports) {
-        if (other.userId == 'anonymous') continue; // Skip anonymous for consensus to prevent spam
-        
         final minDiff = report.createdAt.difference(other.createdAt).inMinutes.abs();
         if (minDiff > 30) continue; // Outside the consensus window
 
@@ -1483,6 +1539,18 @@ Propagation Applied: ${propagationRisk > 0 ? 'YES' : 'NO'}
       'proximity': proximity,
       'total': confidence,
     };
+  }
+
+  Future<void> submitFeedback(Map<String, dynamic> data) async {
+    try {
+      final docRef = await FirebaseFirestore.instance
+          .collection('feedbacks')
+          .add(data);
+      debugPrint('[AppStateService] Feedback submitted successfully: ${docRef.id}');
+    } catch (e) {
+      debugPrint('[AppStateService] Error submitting feedback: $e');
+      rethrow;
+    }
   }
 
 }

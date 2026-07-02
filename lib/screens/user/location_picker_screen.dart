@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart' as geo;
@@ -17,7 +18,7 @@ class LocationPickerScreen extends StatefulWidget {
 
 class _LocationPickerScreenState extends State<LocationPickerScreen> {
   MapboxMap? _mapboxMap;
-  static const String _publicToken = String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg');
+  static final String _publicToken = dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '';
   final TextEditingController _searchController = TextEditingController();
   bool _isSearching = false;
 
@@ -162,12 +163,21 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         permission = await geo.Geolocator.requestPermission();
       }
       if (permission == geo.LocationPermission.whileInUse || permission == geo.LocationPermission.always) {
-        geo.Position position = await geo.Geolocator.getCurrentPosition(
-          locationSettings: const geo.LocationSettings(
-            accuracy: geo.LocationAccuracy.high,
-            timeLimit: Duration(seconds: 5),
-          ),
-        );
+        geo.Position? position;
+        try {
+          position = await geo.Geolocator.getCurrentPosition(
+            locationSettings: const geo.LocationSettings(
+              accuracy: geo.LocationAccuracy.high,
+              timeLimit: Duration(seconds: 15),
+            ),
+          );
+        } catch (e) {
+          position = await geo.Geolocator.getLastKnownPosition();
+          if (position == null) rethrow;
+          if (position.timestamp != null && DateTime.now().difference(position.timestamp!).inMinutes > 5) {
+            throw Exception('GPS_STALE');
+          }
+        }
         _mapboxMap!.flyTo(
           CameraOptions(
             center: Point(coordinates: Position(position.longitude, position.latitude)),
@@ -181,7 +191,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to get location: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('GPS unavailable — please pick a location on the map.')));
     }
   }
 

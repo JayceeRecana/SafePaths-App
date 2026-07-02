@@ -23,9 +23,14 @@ service cloud.firestore {
     }
 
     match /reports/{document=**} {
-      allow read: if true;
+      allow read: if request.auth != null;
       allow create: if request.auth != null;
       allow update, delete: if isAdmin();
+    }
+
+    match /system/weather {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
     }
 
     match /system/{document=**} {
@@ -38,6 +43,18 @@ service cloud.firestore {
 
     match /consensus_audits/{document=**} {
       allow read, write: if isAdmin();
+    }
+
+    match /feedbacks/{feedbackId} {
+      allow create: if request.auth != null
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5
+        && (request.resource.data.userId == null || request.resource.data.userId == request.auth.uid);
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /analytics/{document=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }

@@ -90,7 +90,8 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
   int _dropCount(WeatherState s) {
     switch (s) {
-      case WeatherState.clear:        return 0;
+      case WeatherState.clear:
+      case WeatherState.partlyCloudy: return 0;
       case WeatherState.lightRain:    return 60;
       case WeatherState.moderateRain: return 140;
       case WeatherState.heavyRain:    return 280;
@@ -100,7 +101,8 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
   double _dropSpeed(WeatherState s) {
     switch (s) {
-      case WeatherState.clear:        return 0;
+      case WeatherState.clear:
+      case WeatherState.partlyCloudy: return 0;
       case WeatherState.lightRain:    return 4.5;
       case WeatherState.moderateRain: return 7.5;
       case WeatherState.heavyRain:    return 11.0;
@@ -111,10 +113,12 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
   double _dropAngle(WeatherState s) {
     // typhoon has a strong horizontal wind angle
     switch (s) {
+      case WeatherState.clear:
+      case WeatherState.partlyCloudy: return 0.0;
       case WeatherState.typhoon:      return 0.45; // ~26° from vertical
       case WeatherState.heavyRain:    return 0.20;
       case WeatherState.moderateRain: return 0.10;
-      default:                        return 0.05;
+      case WeatherState.lightRain:    return 0.05;
     }
   }
 
@@ -159,7 +163,8 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
   Color _tintColor(WeatherState s) {
     switch (s) {
-      case WeatherState.clear:        return Colors.transparent;
+      case WeatherState.clear:
+      case WeatherState.partlyCloudy: return Colors.transparent;
       case WeatherState.lightRain:    return const Color(0xFF90CAF9).withValues(alpha: 0.05);
       case WeatherState.moderateRain: return const Color(0xFF5C85C8).withValues(alpha: 0.12);
       case WeatherState.heavyRain:    return const Color(0xFF283593).withValues(alpha: 0.18);
@@ -169,10 +174,12 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
   Color _dropColor(WeatherState s) {
     switch (s) {
+      case WeatherState.clear:
+      case WeatherState.partlyCloudy: return Colors.transparent;
       case WeatherState.typhoon:      return const Color(0xFF5C72A6).withValues(alpha: 0.90);
       case WeatherState.heavyRain:    return const Color(0xFF6B8BCC).withValues(alpha: 0.85);
       case WeatherState.moderateRain: return const Color(0xFF7A9FE6).withValues(alpha: 0.80);
-      default:                        return const Color(0xFF8BAAF0).withValues(alpha: 0.75);
+      case WeatherState.lightRain:    return const Color(0xFF8BAAF0).withValues(alpha: 0.75);
     }
   }
 
@@ -183,7 +190,7 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
     // Nothing to render when clear and tint has faded
     final showBanner = _current == WeatherState.heavyRain ||
         _current == WeatherState.typhoon;
-    final showRain   = _current != WeatherState.clear;
+    final showRain   = _current != WeatherState.clear && _current != WeatherState.partlyCloudy;
 
     if (!showBanner && !showRain && _tintController.value == 0) {
       return const SizedBox.shrink();

@@ -61,80 +61,107 @@ class WeatherSimulatorScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.thunderstorm, size: 20, color: AppColors.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Weather State',
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.onSurface,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.info_outline, size: 16, color: AppColors.primary),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Manually override the weather to test how the Predictive Risk Model escalates vulnerable roads. Click "Reset to Live Data" to turn off the simulation and resume real-time weather polling.',
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.onSurfaceVariant,
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
                   ValueListenableBuilder<WeatherState>(
                     valueListenable: SimulatedWeatherService.instance.listenable,
                     builder: (context, currentState, _) {
-                      return Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: WeatherState.values.map((state) {
-                          final isSelected = currentState == state;
-                          final weatherService = SimulatedWeatherService.instance;
-                          final color = weatherService.getWeatherColor(state);
-                          
-                          return ChoiceChip(
-                            label: Text(weatherService.getWeatherDescription(state)),
-                            selected: isSelected,
-                            selectedColor: color.withValues(alpha: 0.2),
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                            labelStyle: GoogleFonts.inter(
-                              fontSize: 14,
-                              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                              color: isSelected ? color : AppColors.onSurfaceVariant,
+                      final weatherService = SimulatedWeatherService.instance;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.thunderstorm, size: 20, color: AppColors.primary),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Weather State',
+                                style: GoogleFonts.inter(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.onSurface,
+                                ),
+                              ),
+                              const Spacer(),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: weatherService.isOverrideMode 
+                                      ? AppColors.errorContainer 
+                                      : AppColors.primary.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  weatherService.isOverrideMode 
+                                      ? 'Simulation Active' 
+                                      : 'Live Polling Active',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: weatherService.isOverrideMode 
+                                        ? AppColors.notPassable 
+                                        : AppColors.primary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: AppColors.primary.withValues(alpha: 0.1),
+                              ),
                             ),
-                            onSelected: (selected) {
-                              if (selected) {
-                                weatherService.setWeather(state);
-                              }
-                            },
-                          );
-                        }).toList(),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.info_outline, size: 16, color: AppColors.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Manually override the weather to test how the Predictive Risk Model escalates vulnerable roads. Click "Reset to Live Data" to turn off the simulation and resume real-time weather polling.',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: AppColors.onSurfaceVariant,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: WeatherState.values.map((state) {
+                              final isSelected = currentState == state;
+                              final color = weatherService.getWeatherColor(state);
+                              
+                              return ChoiceChip(
+                                label: Text(weatherService.getWeatherDescription(state)),
+                                selected: isSelected,
+                                selectedColor: color.withValues(alpha: 0.2),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                labelStyle: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                                  color: isSelected ? color : AppColors.onSurfaceVariant,
+                                ),
+                                onSelected: (selected) {
+                                  if (selected) {
+                                    weatherService.setWeather(state);
+                                  }
+                                },
+                              );
+                            }).toList(),
+                          ),
+                        ],
                       );
-                    }
+                    },
                   ),
                   const SizedBox(height: 24),
                   const Divider(),

@@ -57,12 +57,29 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
-        Position position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 5),
-          ),
-        );
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted && _isLocating) {
+            setState(() {
+              _locationStatusMessage = 'Still locating GPS (Poor signal)...';
+            });
+          }
+        });
+
+        Position? position;
+        try {
+          position = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 15),
+            ),
+          );
+        } catch (e) {
+          position = await Geolocator.getLastKnownPosition();
+          if (position == null) rethrow;
+          if (position.timestamp != null && DateTime.now().difference(position.timestamp!).inMinutes > 5) {
+            throw Exception('GPS_STALE');
+          }
+        }
         _manualLocation = {'lat': position.latitude, 'lng': position.longitude};
         _snapToNearestRoad(position.latitude, position.longitude, isAutoDetect: true);
       } else {
@@ -75,10 +92,10 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
       if (mounted) {
         setState(() {
           _isLocating = false;
-          _locationStatusMessage = 'Failed to get location.';
+          _locationStatusMessage = 'GPS unavailable.';
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Unable to determine your location.')),
+          const SnackBar(content: Text('GPS unavailable — please use the map pin')),
         );
       }
     }

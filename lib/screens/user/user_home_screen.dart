@@ -86,11 +86,8 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       // Prompt for ANY road that is not passable (including predicted-risk roads)
       if (effectiveStatus == 'passable') continue;
       
-      // Check staleness (dynamic based on weather)
-      double staleThresholdHours = 2.0; // default 2 hours
-      if (weatherState == WeatherState.heavyRain || weatherState == WeatherState.typhoon) {
-        staleThresholdHours = 0.5; // 30 minutes
-      }
+      // Check staleness (tiered by vulnerability)
+      double staleThresholdHours = RiskConfig.getPassableStaleThresholdHours(road.vulnerability);
 
       final hoursOld = DateTime.now().difference(road.updatedAt).inMinutes / 60.0;
       if (hoursOld < staleThresholdHours) continue;

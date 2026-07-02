@@ -128,7 +128,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
     for (final road in appState.roads) {
       double hoursOld = DateTime.now().difference(road.updatedAt).inMinutes / 60.0;
-      bool isStaleData = hoursOld >= 1.0;
+      bool isStaleData = hoursOld >= RiskConfig.getPassableStaleThresholdHours(road.vulnerability);
       if (road.status != 'passable' || !isStaleData) continue;
       if (road.geometry == null) continue;
 

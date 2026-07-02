@@ -4,16 +4,19 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/planned_route.dart';
 import 'app_state_service.dart';
 import 'weather_service.dart';
 import 'location_service.dart';
+import '../config/risk_config.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class RoutingService extends ChangeNotifier {
   static final RoutingService instance = RoutingService._internal();
   RoutingService._internal();
 
-  static const String _publicToken = String.fromEnvironment('MAPBOX_TOKEN', defaultValue: 'pk.eyJ1IjoiamF5Y2VlcmVjYW5hIiwiYSI6ImNtcTljamszcDAxZ2gycXBocmQxczhxN3kifQ.19WWZ3DXdaSG-LG2_zGpbg');
+  static final String _publicToken = dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '';
   
   bool isRoutePlanning = false;
   bool isRouteLoading = false;
@@ -31,6 +34,7 @@ class RoutingService extends ChangeNotifier {
   // Analytics for Dashboard
   int routesProtectedCount = 0;
   double averageRiskReduction = 0.0;
+  String? _lastCalculatedRouteSignature;
 
   // ─── DEV TESTING MODE ────────────────────────────────────────────────────
   // Set to true to pin the origin to Barangay Marulas so you can test routing
@@ -402,10 +406,21 @@ class RoutingService extends ChangeNotifier {
         final topRoute = routes.first;
         
         // Track analytics
-        if (topRoute.riskReductionPercentage != null && topRoute.riskReductionPercentage! > 0) {
+        final signature = '${originPoint?.lat},${originPoint?.lng}|${destinationPoint?.lat},${destinationPoint?.lng}';
+        if (signature != _lastCalculatedRouteSignature && topRoute.riskReductionPercentage != null && topRoute.riskReductionPercentage! > 0) {
+           _lastCalculatedRouteSignature = signature;
            routesProtectedCount++;
            double oldTotal = averageRiskReduction * (routesProtectedCount - 1);
            averageRiskReduction = (oldTotal + topRoute.riskReductionPercentage!) / routesProtectedCount;
+           
+           try {
+             FirebaseFirestore.instance.collection('analytics').doc('routing').set({
+               'routesProtectedCount': FieldValue.increment(1),
+               'totalRiskReduction': FieldValue.increment(topRoute.riskReductionPercentage!),
+             }, SetOptions(merge: true));
+           } catch (e) {
+             debugPrint('Failed to sync analytics: $e');
+           }
         }
 
         debugPrint('\n--- ROUTE ANALYSIS ---');
@@ -651,7 +666,8 @@ class RoutingService extends ChangeNotifier {
           }
 
           String roadEffectiveStatus = road.getEffectiveStatus(weatherState);
-          bool isStaleData = DateTime.now().difference(road.updatedAt).inHours >= 1;
+          double hoursOldForStaleness = DateTime.now().difference(road.updatedAt).inMinutes / 60.0;
+          bool isStaleData = hoursOldForStaleness >= RiskConfig.getPassableStaleThresholdHours(road.vulnerability);
 
           // Critical Barrier Logic
           if (currentRisk >= 80.0 || roadEffectiveStatus == 'not_passable') {

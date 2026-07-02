@@ -33,8 +33,8 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
       appBar: AppTopBar(
         title: 'Broadcast Alert',
         showBackButton: widget.isStandalone,
-        showProfile: false,
-        showSettingsAction: false,
+        showProfile: true,
+        showSettingsAction: true,
         onBackPressed: widget.isStandalone ? () {
           if (Navigator.canPop(context)) Navigator.pop(context);
         } : null,
@@ -42,31 +42,10 @@ class _BroadcastAlertScreenState extends State<BroadcastAlertScreen> {
       backgroundColor: AppColors.surface,
       body: SingleChildScrollView(
         controller: _scrollController,
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'PUBLIC WARNING',
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 2.5,
-                color: AppColors.tertiary,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Emergency Alert\nComposer',
-              style: GoogleFonts.manrope(
-                fontSize: 32,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.8,
-                color: AppColors.onSurface,
-                height: 1.15,
-              ),
-            ),
-            const SizedBox(height: 18),
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(

@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:math';
 
 enum UserRole { user, admin }
 
@@ -12,8 +14,21 @@ class UserService {
     if (user != null) {
       return user.uid;
     }
-    // Fallback for unauthorized guest reports
-    return 'anonymous';
+    // Fallback: Login anonymously
+    try {
+      final userCredential = await FirebaseAuth.instance.signInAnonymously();
+      return userCredential.user!.uid;
+    } catch (e) {
+      // Very worst-case fallback if network is entirely down on first launch
+      debugPrint('[CRITICAL_WARNING] Firebase Anonymous Auth Failed. Using local offline fallback.');
+      final prefs = await SharedPreferences.getInstance();
+      String? offlineId = prefs.getString('offline_fallback_id');
+      if (offlineId == null) {
+        offlineId = 'anon_offline_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(10000)}';
+        await prefs.setString('offline_fallback_id', offlineId);
+      }
+      return offlineId;
+    }
   }
 
   // Save user role locally for quick UI routing

@@ -46,14 +46,11 @@ class UserReportCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.outlineVariant.withValues(alpha: 0.15),
-        ),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
+            blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ],
@@ -62,59 +59,51 @@ class UserReportCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(24),
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Top section: Road name and Incident Type
+                // Top section: Badges
                 Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            roadName.toUpperCase(),
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.5,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            incidentType,
-                            style: GoogleFonts.manrope(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.onSurface,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Status Badge
+                    // Severity Badge
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isVerified ? iconColor.withValues(alpha: 0.15) : AppColors.surfaceContainerHighest,
+                        color: iconColor,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        isVerified ? 'VERIFIED' : (trustLevel != null ? 'LEVEL $trustLevel TRUST' : 'PENDING'),
+                        incidentType.toUpperCase(),
                         style: GoogleFonts.inter(
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
                           letterSpacing: 1.0,
-                          color: isVerified ? iconColor : AppColors.onSurfaceVariant,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    // Trust Badge with underline
+                    Container(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: isVerified ? AppColors.secondary : (iconColor.withValues(alpha: 0.5)),
+                            width: 3,
+                          ),
+                        ),
+                      ),
+                      child: Text(
+                        isVerified ? 'VERIFIED TRUST' : (trustLevel != null ? 'LEVEL $trustLevel TRUST' : 'PENDING'),
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.0,
+                          color: isVerified ? AppColors.secondary : AppColors.outlineVariant,
                         ),
                       ),
                     ),
@@ -122,6 +111,31 @@ class UserReportCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 
+                // Location
+                Text(
+                  roadName.toUpperCase(),
+                  style: GoogleFonts.inter(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Headline
+                Text(
+                  title,
+                  style: GoogleFonts.manrope(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.onSurface,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 12),
+
                 // User Avatar Row
                 Row(
                   children: [
@@ -129,7 +143,7 @@ class UserReportCard extends StatelessWidget {
                       width: 24,
                       height: 24,
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade200,
+                        color: AppColors.surfaceContainerHigh,
                         shape: BoxShape.circle,
                       ),
                       child: Center(
@@ -138,7 +152,7 @@ class UserReportCard extends StatelessWidget {
                           style: GoogleFonts.inter(
                             fontSize: 10,
                             fontWeight: FontWeight.w700,
-                            color: Colors.black87,
+                            color: AppColors.onSurfaceVariant,
                           ),
                         ),
                       ),
@@ -167,7 +181,7 @@ class UserReportCard extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 
                 // Bottom Actions
                 Row(
@@ -178,7 +192,7 @@ class UserReportCard extends StatelessWidget {
                       style: GoogleFonts.inter(
                         fontSize: 10,
                         fontWeight: FontWeight.w800,
-                        color: Colors.blueGrey.shade400,
+                        color: AppColors.outlineVariant,
                       ),
                     ),
                     Row(
@@ -187,7 +201,7 @@ class UserReportCard extends StatelessWidget {
                           'View Details',
                           style: GoogleFonts.inter(
                             fontSize: 12,
-                            fontWeight: FontWeight.w700,
+                            fontWeight: FontWeight.w800,
                             color: AppColors.primary,
                           ),
                         ),

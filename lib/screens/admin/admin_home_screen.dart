@@ -16,12 +16,21 @@ class AdminHomeScreen extends StatefulWidget {
 class _AdminHomeScreenState extends State<AdminHomeScreen> {
   int _currentIndex = 0;
   bool _isLoading = true;
+  bool _hideNavBar = false;
 
-  final List<Widget> _screens = const [
-    AdminPanelScreen(),
-    UpdateRoadStatusScreen(),
-    BroadcastAlertScreen(),
-    UserReportsScreen(),
+  void _onSelectionChanged(bool hasSelection) {
+    if (mounted) {
+      setState(() {
+        _hideNavBar = hasSelection;
+      });
+    }
+  }
+
+  List<Widget> get _screens => [
+    const AdminPanelScreen(),
+    UpdateRoadStatusScreen(onSelectionChanged: _onSelectionChanged),
+    const BroadcastAlertScreen(),
+    UserReportsScreen(onSelectionChanged: _onSelectionChanged),
   ];
 
   @override
@@ -51,13 +60,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         index: _currentIndex,
         children: _screens,
       ),
-      bottomNavigationBar: AdminBottomNavBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+      bottomNavigationBar: AnimatedSize(
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.fastOutSlowIn,
+        child: _hideNavBar
+            ? const SizedBox(width: double.infinity, height: 0)
+            : AdminBottomNavBar(
+                currentIndex: _currentIndex,
+                onTap: (index) {
+                  setState(() {
+                    _currentIndex = index;
+                  });
+                },
+              ),
       ),
     );
   }
