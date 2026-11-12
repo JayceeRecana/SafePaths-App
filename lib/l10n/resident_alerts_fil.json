@@ -1,0 +1,17 @@
+{
+  "Hide alert": "Itago ang abiso",
+  "Hide all": "Itago lahat",
+  "Alerts hidden from your list.": "Naitago ang mga abiso sa iyong listahan.",
+  "Updates for your area": "Mga abiso para sa inyong lugar",
+  "Severity not recorded": "Walang naitalang antas ng babala",
+  "Alert area not recorded": "Walang naitalang lugar para sa abiso",
+  "Issue time not recorded": "Walang naitalang oras ng paglabas",
+  "End time not recorded": "Walang naitalang oras ng pagtatapos",
+  "End time": "Oras ng pagtatapos",
+  "Issued": "Inilabas",
+  "Active until": "Aktibo hanggang",
+  "Withdrawal reason": "Dahilan ng pagbawi",
+  "This alert is no longer active. Check current alerts before acting.": "Hindi na aktibo ang abisong ito. Tingnan ang kasalukuyang mga abiso bago kumilos.",
+  "An announcement does not change the verified road condition. Check the latest road update before travel.": "Hindi binabago ng anunsiyo ang beripikadong kondisyon ng kalsada. Tingnan ang pinakabagong tala ng kalsada bago bumiyahe.",
+  "Saved information; reconnect to check the latest status.": "Naka-save na impormasyon; kumonekta upang tingnan ang pinakabagong kalagayan."
+}

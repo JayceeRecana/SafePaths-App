@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SafePaths Test - Live UI",
+      "type": "dart",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "program": "lib/main.dart",
+      "flutterMode": "debug",
+      "toolArgs": [
+        "--flavor=fieldtest",
+        "--dart-define-from-file=${workspaceFolder}/config/build/fieldtest.json"
+      ]
+    },
+    {
+      "name": "SafePaths Marulas - Live UI",
+      "type": "dart",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "program": "lib/main.dart",
+      "flutterMode": "debug",
+      "toolArgs": [
+        "--flavor=production",
+        "--dart-define-from-file=${workspaceFolder}/config/build/marulas.json"
+      ]
+    }
+  ]
+}

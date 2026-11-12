@@ -1,11 +1,17 @@
+import '../../widgets/settings_preference_card.dart';
+import '../../theme/app_palette.dart';
+import '../../l10n/app_strings.dart';
+import '../../services/app_preferences.dart';
+import '../../widgets/notification_status_card.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
 import '../../services/user_service.dart';
 import 'login_screen.dart';
 import 'feedback_screen.dart';
+import 'emergency_hotlines_screen.dart';
 import '../admin/admin_feedback_screen.dart';
+import '../admin/admin_home_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -15,10 +21,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _guardianMode = true;
-  bool _pushAlerts = true;
-  bool _offlineMaps = true;
-  bool _mapDarkMode = true;
   bool _isAdmin = false;
 
   @override
@@ -40,83 +42,175 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppTopBar(
-        title: 'Settings',
+        title: tr(context, 'Settings'),
         showBackButton: true,
         showProfile: false,
         showSettingsAction: false,
         onBackPressed: () => Navigator.of(context).pop(),
       ),
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppPalette.of(context).surface,
       body: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'APP PREFERENCES',
+              tr(context, 'APP PREFERENCES'),
               style: GoogleFonts.inter(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 2.0,
-                color: AppColors.primary,
+                color: AppPalette.of(context).primary,
               ),
             ),
             const SizedBox(height: 6),
             Text(
-              'Safety & Notification Controls',
+              tr(context, 'Safety & Notification Controls'),
               style: GoogleFonts.manrope(
                 fontSize: 24,
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.4,
-                color: AppColors.onSurface,
+                color: AppPalette.of(context).onSurface,
               ),
             ),
             const SizedBox(height: 20),
-            _SettingsToggleCard(
-              title: 'Guardian Mode (Coming Soon)',
-              subtitle: 'Prioritize safest passable roads during routing.',
-              icon: Icons.shield_rounded,
-              value: false,
-              onChanged: null,
+            const NotificationStatusCard(settingsStyle: true),
+            const SizedBox(height: 12),
+            _SettingsActionCard(
+              title: tr(context, 'Emergency hotlines'),
+              subtitle: tr(
+                context,
+                'Valenzuela City disaster, fire, police and hospital contacts.',
+              ),
+              icon: Icons.call_outlined,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const EmergencyHotlinesScreen(),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
-            _SettingsToggleCard(
-              title: 'Emergency Push Alerts (Coming Soon)',
-              subtitle: 'Receive live flood and evacuation notifications.',
-              icon: Icons.notifications_active_rounded,
-              value: false,
-              onChanged: null,
+            Card(
+              margin: EdgeInsets.zero,
+              elevation: 0,
+              color: AppPalette.of(context).surfaceContainerLow,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  tr(
+                    context,
+                    'Saved road conditions are available only after they have loaded online and while they remain on this phone. Map tiles may be missing. New routes and report submission require internet. Saved information may be outdated.',
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
-            _SettingsToggleCard(
-              title: 'Offline Map Sync (Coming Soon)',
-              subtitle: 'Keep essential map data available without internet.',
-              icon: Icons.download_for_offline_rounded,
-              value: false,
-              onChanged: null,
+            SettingsPreferenceCard(
+              title: tr(context, 'App language'),
+              icon: Icons.language_rounded,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: AppPreferences.instance.locale.languageCode,
+                    isExpanded: true,
+                    itemHeight: null,
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'Language'),
+                    ),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'en',
+                        child: Text(tr(context, 'English')),
+                      ),
+                      DropdownMenuItem(
+                        value: 'fil',
+                        child: Text(tr(context, 'Filipino')),
+                      ),
+                    ],
+                    onChanged: (language) async {
+                      if (language == null) return;
+                      final saved = await AppPreferences.instance.setLanguage(
+                        language,
+                      );
+                      if (!saved && context.mounted)
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              tr(
+                                context,
+                                'Language changed for now. It could not be saved on this phone.',
+                              ),
+                            ),
+                          ),
+                        );
+                    },
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
-            _SettingsToggleCard(
-              title: 'Dynamic Map Dark Mode (Coming Soon)',
-              subtitle: 'Automatically switch map style based on device system theme.',
-              icon: Icons.dark_mode_rounded,
-              value: false,
-              onChanged: null,
+            SettingsPreferenceCard(
+              title: tr(context, 'Appearance'),
+              icon: Icons.palette_outlined,
+              child: Semantics(
+                label: tr(context, 'Appearance'),
+                child: DropdownButtonFormField<ThemeMode>(
+                  isExpanded: true,
+                  itemHeight: null,
+                  initialValue: AppPreferences.instance.themeMode,
+                  decoration: const InputDecoration(),
+                  items: [
+                    DropdownMenuItem(
+                      value: ThemeMode.system,
+                      child: Text(tr(context, 'Use phone theme')),
+                    ),
+                    DropdownMenuItem(
+                      value: ThemeMode.light,
+                      child: Text(tr(context, 'Light')),
+                    ),
+                    DropdownMenuItem(
+                      value: ThemeMode.dark,
+                      child: Text(tr(context, 'Dark')),
+                    ),
+                  ],
+                  onChanged: (mode) async {
+                    if (mode == null) return;
+                    final saved = await AppPreferences.instance.setThemeMode(
+                      mode,
+                    );
+                    if (!saved && context.mounted)
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            tr(
+                              context,
+                              'Appearance changed for now. It could not be saved on this phone.',
+                            ),
+                          ),
+                        ),
+                      );
+                  },
+                ),
+              ),
             ),
             const SizedBox(height: 24),
             Text(
-              'COMMUNITY',
+              tr(context, 'COMMUNITY'),
               style: GoogleFonts.inter(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 2.0,
-                color: AppColors.primary,
+                color: AppPalette.of(context).primary,
               ),
             ),
             const SizedBox(height: 16),
             _SettingsActionCard(
-              title: 'Feedback & Suggestions',
-              subtitle: 'Help us improve SafePaths for Marulas.',
+              title: tr(context, 'Feedback & Suggestions'),
+              subtitle: tr(context, 'Help us improve SafePaths for Marulas.'),
               icon: Icons.rate_review_rounded,
               onTap: () {
                 Navigator.of(context).push(
@@ -127,22 +221,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (_isAdmin) ...[
               const SizedBox(height: 24),
               Text(
-                'CAPSTONE TOOLS',
+                tr(context, 'ADMINISTRATION'),
                 style: GoogleFonts.inter(
                   fontSize: 11,
-                  fontWeight: FontWeight.w900,
+                  fontWeight: FontWeight.w700,
                   letterSpacing: 2.0,
-                  color: AppColors.error,
+                  color: AppPalette.of(context).primary,
                 ),
               ),
               const SizedBox(height: 16),
               _SettingsActionCard(
-                title: 'Review Community Feedback',
-                subtitle: 'Manage feedback for Chapter 4 data collection.',
+                title: tr(context, 'Return to Admin Console'),
+                subtitle: tr(
+                  context,
+                  'Manage roads, broadcast alerts, and user reports.',
+                ),
+                icon: Icons.admin_panel_settings_rounded,
+                onTap: () {
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
+                    (route) => false,
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+              Text(
+                tr(context, 'CAPSTONE TOOLS'),
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2.0,
+                  color: AppPalette.of(context).error,
+                ),
+              ),
+              const SizedBox(height: 16),
+              _SettingsActionCard(
+                title: tr(context, 'Review Community Feedback'),
+                subtitle: tr(
+                  context,
+                  'Manage feedback for Chapter 4 data collection.',
+                ),
                 icon: Icons.school_rounded,
                 onTap: () {
                   Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const AdminFeedbackScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const AdminFeedbackScreen(),
+                    ),
                   );
                 },
               ),
@@ -153,10 +277,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               width: double.infinity,
               decoration: BoxDecoration(
-                color: AppColors.error.withValues(alpha: 0.1),
+                color: AppPalette.of(context).error.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: AppColors.error.withValues(alpha: 0.3),
+                  color: AppPalette.of(context).error.withValues(alpha: 0.3),
                 ),
               ),
               child: ElevatedButton(
@@ -178,95 +302,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 child: Text(
-                  'Logout',
+                  tr(context, 'Logout'),
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.error,
+                    color: AppPalette.of(context).error,
                   ),
                 ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SettingsToggleCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final bool value;
-  final ValueChanged<bool>? onChanged;
-
-  const _SettingsToggleCard({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.value,
-    this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: AppColors.primary, size: 24),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.manrope(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: AppColors.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            activeThumbColor: AppColors.primary,
-          ),
-        ],
       ),
     );
   }
@@ -287,60 +333,70 @@ class _SettingsActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLowest,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(12),
+    return Semantics(
+      button: true,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: AppPalette.of(context).surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
               ),
-              child: Icon(icon, color: AppColors.primary, size: 24),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: GoogleFonts.manrope(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      color: AppColors.onSurfaceVariant,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppPalette.of(context).primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  icon,
+                  color: AppPalette.of(context).primary,
+                  size: 24,
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Icon(Icons.chevron_right_rounded, color: AppColors.outlineVariant),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: GoogleFonts.manrope(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppPalette.of(context).onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: AppPalette.of(context).onSurfaceVariant,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: AppPalette.of(context).outlineVariant,
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1,199 +1,280 @@
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
+    show
+        Position,
+        MapboxMap,
+        Point,
+        CameraOptions,
+        MbxEdgeInsets,
+        MapAnimationOptions;
+import '../../l10n/app_strings.dart';
 import '../../models/planned_route.dart';
-import '../../theme/app_colors.dart';
+import '../../services/app_state_service.dart';
+import '../../services/map_load_state.dart';
+import '../../services/routing_service.dart';
+import '../../services/weather_service.dart';
 import '../../widgets/app_map.dart';
-import 'navigation_screen.dart';
+import '../../widgets/map_status_banner.dart';
+import '../../widgets/planner_preview_controls.dart';
+import '../../widgets/route_navigation.dart';
+import 'road_details_screen.dart';
 
-class RoutePreviewScreen extends StatelessWidget {
+class RoutePreviewScreen extends StatefulWidget {
   final PlannedRoute route;
 
-  const RoutePreviewScreen({super.key, required this.route});
+  /// Replaces only the native map boundary in real-screen tests.
+  final Widget Function(List<Position>)? routeMapBuilder;
+  const RoutePreviewScreen({
+    super.key,
+    required this.route,
+    this.routeMapBuilder,
+  });
+  @override
+  State<RoutePreviewScreen> createState() => _RoutePreviewScreenState();
+}
+
+class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
+  late PlannedRoute _selectedRoute;
+  bool _openingNavigation = false;
+  final _mapStatus = MapLoadState();
+  final _mapKey = GlobalKey<AppMapState>();
+  final _mapViewportKey = GlobalKey();
+  final _headerKey = GlobalKey();
+  MapboxMap? _map;
+  List<Position>? _fitPoints;
+  Size? _fitSize;
+  double? _fitHeaderHeight;
+  int _fitGeneration = 0;
+  int _dataRevision = 0, _evaluatedRevision = -1;
+  List<PlannedRoute>? _sourceSnapshot;
+  List<PlannedRoute> _evaluatedRoutes = [];
+  PlannedRoute? _evaluatedFallback;
+
+  void _refresh() {
+    if (mounted) setState(() => _dataRevision++);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedRoute = widget.route;
+    RoutingService.instance.addListener(_refresh);
+    AppStateService.instance.mapChanges.addListener(_refresh);
+    AppStateService.instance.addListener(_refresh);
+    SimulatedWeatherService.instance.listenable.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    _fitGeneration++;
+    RoutingService.instance.removeListener(_refresh);
+    AppStateService.instance.mapChanges.removeListener(_refresh);
+    AppStateService.instance.removeListener(_refresh);
+    SimulatedWeatherService.instance.listenable.removeListener(_refresh);
+    _mapStatus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _navigate(PlannedRoute route) async {
+    if (_openingNavigation || !route.canStartNavigation) return;
+    setState(() => _openingNavigation = true);
+    try {
+      await startRouteNavigation(context, route, replacePreview: true);
+    } finally {
+      if (mounted) setState(() => _openingNavigation = false);
+    }
+  }
+
+  void _scheduleFit(List<Position> points) {
+    if (widget.routeMapBuilder != null || _map == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_fitRoute(points)),
+    );
+  }
+
+  Future<void> _fitRoute(List<Position> points) async {
+    final map = _map;
+    if (!mounted ||
+        map == null ||
+        points.length < 2 ||
+        points.any((p) => !p.lat.isFinite || !p.lng.isFinite)) {
+      return;
+    }
+    final size = _mapViewportKey.currentContext?.size;
+    final header = _headerKey.currentContext?.size?.height ?? 80;
+    if (size == null || size.height < 60 || size.width < 60) return;
+    if (identical(_fitPoints, points) &&
+        _fitSize == size &&
+        _fitHeaderHeight == header) {
+      return;
+    }
+    _fitPoints = points;
+    _fitSize = size;
+    _fitHeaderHeight = header;
+    final generation = ++_fitGeneration;
+    try {
+      final camera = await map.cameraForCoordinatesPadding(
+        points.map((p) => Point(coordinates: p)).toList(),
+        CameraOptions(bearing: 0, pitch: 0),
+        MbxEdgeInsets(
+          top: math.min(header + 20, size.height * .45),
+          left: 24,
+          bottom: 24,
+          right: 24,
+        ),
+        17,
+        null,
+      );
+      if (!mounted || generation != _fitGeneration || !identical(map, _map)) {
+        return;
+      }
+      await map.flyTo(camera, MapAnimationOptions(duration: 650));
+    } catch (_) {
+      // A camera-fit failure does not replace routing or remove manual map gestures.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    int risks = route.avoidedRoads.length;
-
+    final service = RoutingService.instance;
+    final sourceRoutes = service.routes;
+    if (_evaluatedRevision != _dataRevision ||
+        !identical(_sourceSnapshot, sourceRoutes)) {
+      _sourceSnapshot = sourceRoutes;
+      _evaluatedRevision = _dataRevision;
+      _evaluatedRoutes = sourceRoutes
+          .map((r) => service.refreshRoute(r))
+          .toList();
+      _evaluatedFallback = service.refreshRoute(_selectedRoute);
+    }
+    final options = <PreviewRouteOption>[
+      for (var i = 0; i < sourceRoutes.length; i++)
+        PreviewRouteOption(
+          _evaluatedRoutes[i],
+          i == 0
+              ? tr(context, 'Best available')
+              : '${tr(context, 'Alternative')} $i',
+        ),
+    ];
+    var selectedIndex = options.indexWhere(
+      (o) => identical(o.route.points, _selectedRoute.points),
+    );
+    final retained = selectedIndex < 0;
+    if (retained) {
+      options.add(
+        PreviewRouteOption(_evaluatedFallback!, tr(context, 'Selected route')),
+      );
+      selectedIndex = options.length - 1;
+    }
+    final active = options[selectedIndex].route;
+    final title = !retained && selectedIndex == 0
+        ? tr(context, 'Best available route')
+        : options[selectedIndex].label;
     return Scaffold(
-      body: Stack(
-        children: [
-          // Full Screen Map
-          AppMap(routePoints: route.points),
-          
-          // Gradient at top for better visibility of back button and card
-          Positioned(
-            top: 0, left: 0, right: 0, height: 160,
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.black.withValues(alpha: 0.5), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-
-          // Top Header (Unified Info Card)
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 16,
-            left: 16,
-            right: 16,
-            child: Container(
-              padding: const EdgeInsets.only(left: 8, right: 16, top: 12, bottom: 12),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 4))
-                ],
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: AppColors.onSurface),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          route.safetyStatus == 'flooded' ? 'Destination Unreachable' : route.summary,
-                          style: GoogleFonts.manrope(fontSize: 16, fontWeight: FontWeight.w800, color: route.safetyStatus == 'flooded' ? AppColors.error : AppColors.onSurface),
-                        ),
-                        if (route.safetyStatus != 'flooded') ...[
-                          const SizedBox(height: 4),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                '${route.durationMin} min (${route.distanceMiles} mi)',
-                                style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.primary),
-                              ),
-                              if (risks > 0)
-                                Row(
-                                  children: [
-                                    const Icon(Icons.warning, color: AppColors.error, size: 14),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '$risks Hazards Avoided',
-                                      style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.error),
-                                    ),
-                                  ],
-                                )
-                              else
-                                Row(
-                                  children: [
-                                    const Icon(Icons.check_circle, color: AppColors.secondary, size: 14),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Clear Route',
-                                      style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.secondary),
-                                    ),
-                                  ],
-                                )
-                            ],
-                          ),
-                        ] else ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            'No safe paths available',
-                            style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.error),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // Start Navigation Floating Bar
-          if (route.safetyStatus == 'flooded')
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 24,
-              left: 24,
-              right: 24,
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                decoration: BoxDecoration(
-                  color: AppColors.errorContainer,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-                  boxShadow: [
-                    BoxShadow(color: AppColors.error.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.block, color: AppColors.error, size: 22),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Route Blocked by Flood',
-                          style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 0.5, color: AppColors.error),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        'All available paths are currently impassable. Please wait for water levels to subside or select an alternative safe zone.',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.error.withValues(alpha: 0.8), height: 1.4),
+      body: LayoutBuilder(
+        builder: (context, bounds) {
+          // Fixed for this viewport/text scale. Content scrolls within the panel;
+          // dragging must never resize it or consume the visible map.
+          final largeText = MediaQuery.textScalerOf(context).scale(14) > 20;
+          final fraction = bounds.maxHeight < 500
+              ? .5
+              : largeText
+              ? .45
+              : .35;
+          final panelHeight = bounds.maxHeight * fraction;
+          _scheduleFit(active.points);
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: panelHeight,
+                child: SizedBox(
+                  key: _mapViewportKey,
+                  child:
+                      widget.routeMapBuilder?.call(active.points) ??
+                      AppMap(
+                        key: _mapKey,
+                        routePoints: active.points,
+                        destinationPoint: active.points.isEmpty
+                            ? null
+                            : active.points.last,
+                        loadState: _mapStatus,
+                        showStatusBanner: false,
+                        onMapCreatedCallback: (map) {
+                          _map = map;
+                          _fitPoints = null;
+                          _scheduleFit(active.points);
+                        },
+                        onRoadTapped: (id, _) => Navigator.of(
+                          context,
+                        ).push(RoadDetailsScreen.route(id)),
                       ),
-                    ),
-                  ],
                 ),
               ),
-            )
-          else
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 24,
-              left: 24,
-              right: 24,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppColors.primary, AppColors.primaryContainer],
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(color: AppColors.primary.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
-                  ],
-                ),
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context); // Close preview
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => NavigationScreen(route: route))); // Start navigation
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+              Positioned(
+                top: MediaQuery.paddingOf(context).top + 12,
+                left: 16,
+                right: 16,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: bounds.maxHeight * .3),
+                  child: Column(
+                    key: _headerKey,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        'Start Navigation',
-                        style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: 0.5, color: Colors.white),
+                      RoutePreviewHeader(
+                        title: title,
+                        route: active,
+                        onBack: () => Navigator.of(context).pop(),
                       ),
-                      const SizedBox(width: 8),
-                      const Icon(Icons.navigation, color: Colors.white, size: 22),
+                      Flexible(
+                        fit: FlexFit.loose,
+                        child: SingleChildScrollView(
+                          child: MapStatusBanner(
+                            status: _mapStatus,
+                            onRetry: () => _mapKey.currentState?.retryMap(),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
-            ),
-        ],
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                height: panelHeight,
+                child: RoutePreviewPanel(
+                  options: options,
+                  selectedIndex: selectedIndex,
+                  opening: _openingNavigation,
+                  liveDataUnavailable:
+                      AppStateService.instance.requiresLiveDataWarning ||
+                      SimulatedWeatherService.instance.isDataStale,
+                  onSelect: (index) {
+                    if (_openingNavigation) return;
+                    final chosen = options[index].route;
+                    setState(() => _selectedRoute = chosen);
+                    final providerIndex = service.routes.indexWhere(
+                      (r) => identical(r.points, chosen.points),
+                    );
+                    if (providerIndex >= 0) service.selectRoute(providerIndex);
+                  },
+                  onNavigate: active.canStartNavigation && !_openingNavigation
+                      ? () => _navigate(active)
+                      : null,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

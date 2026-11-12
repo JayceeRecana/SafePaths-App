@@ -1,0 +1,75 @@
+{
+  "source_sha256": "11be85150d2bc7605054b555d211b286b17740b8a89cc0f6f815945dd31ad7c1",
+  "method": "Independent Shapely polygon difference/intersection; straight east-west lines, fractions of unique mapped length; highest-class overlap assignment.",
+  "cases": [
+    {
+      "name": "Marulas east-west 14.667",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            120.95,
+            14.667
+          ],
+          [
+            121.02,
+            14.667
+          ]
+        ]
+      },
+      "fractions": {
+        "high": 0.0013260615791719562,
+        "medium": 0.026521250827575567,
+        "low": 0.06859960423295225,
+        "noMappedHazard": 0.4964102262174895,
+        "outsidePrepared": 0.40714285714281073
+      }
+    },
+    {
+      "name": "Marulas east-west 14.676",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            120.95,
+            14.676
+          ],
+          [
+            121.02,
+            14.676
+          ]
+        ]
+      },
+      "fractions": {
+        "high": 0.046413744828608786,
+        "medium": 0.16178525737344787,
+        "low": 0.04436236421047342,
+        "noMappedHazard": 0.3402957764446592,
+        "outsidePrepared": 0.40714285714281073
+      }
+    },
+    {
+      "name": "Marulas east-west 14.685",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            120.95,
+            14.685
+          ],
+          [
+            121.02,
+            14.685
+          ]
+        ]
+      },
+      "fractions": {
+        "high": 0.047741743733813666,
+        "medium": 0.023870956035972203,
+        "low": 0.02328098135982437,
+        "noMappedHazard": 0.497963461727579,
+        "outsidePrepared": 0.40714285714281073
+      }
+    }
+  ]
+}

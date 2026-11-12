@@ -1,0 +1,14 @@
+{
+  "Choose the level you observed. An administrator will review your report.": "Piliin ang antas ng baha na nakita mo. Susuriin ng tagapangasiwa ang iyong ulat.",
+  "Please choose the flood level you observed.": "Piliin muna ang antas ng baha na nakita mo.",
+  "Flag this report for urgent review.": "Markahan ang ulat na ito para sa agarang pagsusuri.",
+  "Choose the road condition you checked.": "Piliin ang kondisyon ng kalsadang sinuri mo.",
+  "Previously selected condition": "Kondisyong pinili sa nakaraang screen",
+  "Describe who or what checked the road, when, and what was observed. These findings are visible with the road update.": "Ilarawan kung sino o ano ang nagsuri sa kalsada, kailan, at ano ang nakita. Makikita ang mga natuklasan kasama ng update sa kalsada.",
+  "Sending a message does not verify the report or change the road condition. Use Review & Verify to record a decision.": "Hindi nababago ng mensahe ang beripikasyon ng ulat o kondisyon ng kalsada. Gamitin ang Suriin at Beripikahin upang itala ang pasya.",
+  "Private messages are updates. The report review and road condition are recorded separately.": "Mga update ang pribadong mensahe. Hiwalay na itinatala ang pagsusuri ng ulat at kondisyon ng kalsada.",
+  "The observation was verified. Check the road condition separately before travel.": "Naberipika ang obserbasyon. Tingnan nang hiwalay ang kondisyon ng kalsada bago bumiyahe.",
+  "Send update": "Ipadala ang update",
+  "Report road conditions": "Mag-ulat ng kondisyon ng kalsada",
+  "Urgent report": "Agarang ulat"
+}

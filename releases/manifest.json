@@ -1,0 +1,49 @@
+{
+  "updated": "2026-11-10",
+  "installers": [
+    {
+      "file": "SafePaths-Test-20261103-v1.0.5.apk",
+      "purpose": "Nearby test area; Firebase safepaths-test",
+      "bytes": 135867856,
+      "sha256": "603aeb7fc69ade263189b6a29719ac452a8f8f34ede5de89a78c9970b641cc7d",
+      "originalPath": ".usability-work-baseline\\review-candidate\\SafePaths-Test-20261103-v1.0.5.apk",
+      "method": "hardlink"
+    },
+    {
+      "file": "SafePaths-Marulas-20261110-v1.0.9.apk",
+      "purpose": "Marulas capstone; consolidated reporting, protected photos/avatars, reply and notification states, and clearer road-check reminders; Firebase safepaths-92c3d",
+      "versionName": "1.0.9",
+      "versionCode": 9,
+      "bytes": 135310622,
+      "sha256": "aad3459b01e04c84a39dffe8cb37435ebee6687cbc70cdd2c6e2d53539dd4178",
+      "originalPath": "build\\app\\outputs\\flutter-apk\\app-production-release.apk",
+      "method": "copy",
+      "buildSettings": "config/build/marulas.json"
+    }
+  ],
+  "note": "Marulas 1.0.9 built, verified, installed and launched on emulator-5554 on November 10. Universal APK supports both phone and emulator. Nearby test installer remains November 3. Older installers retained.",
+  "archivedInstallers": [
+    {
+      "file": "SafePaths-Marulas-20261110-v1.0.7.apk",
+      "purpose": "Marulas capstone; current UI and local rerouting fixes; Firebase safepaths-92c3d",
+      "versionName": "1.0.7",
+      "versionCode": 7,
+      "bytes": 135048266,
+      "sha256": "d1f185e28e460b306565ac706f3aee051fbe0895bcd363a697fcef2a458b60ac",
+      "originalPath": "build\\app\\outputs\\flutter-apk\\app-production-release.apk",
+      "method": "copy",
+      "buildSettings": "config/build/marulas.json"
+    },
+    {
+      "file": "SafePaths-Marulas-20261110-v1.0.8.apk",
+      "purpose": "Marulas capstone; updated reporting UI, evidence visibility, and reporting edge-case fixes; Firebase safepaths-92c3d",
+      "versionName": "1.0.8",
+      "versionCode": 8,
+      "bytes": 135310474,
+      "sha256": "586a48993abdd22519f6091f70bc38a2978c7e8e1ae92f0e1acbd68c7fcd1b1c",
+      "originalPath": "build\\app\\outputs\\flutter-apk\\app-production-release.apk",
+      "method": "copy",
+      "buildSettings": "config/build/marulas.json"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# The endpoint performs its own strict Firebase JWT + current-account checks.
+# Other existing Supabase functions/policies are not changed by this file.
+project_id = "safepaths-spark-proof"
+
+[functions.safepaths-report-proof]
+verify_jwt = false
+
+# Separate handler verifies main-project Firebase JWTs itself.
+[functions.safepaths-main]
+verify_jwt = false

@@ -1,12 +1,13 @@
+import '../../theme/app_palette.dart';
+import '../../l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../theme/app_colors.dart';
+import '../../services/account_security.dart';
+import 'account_gate_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/user_service.dart';
 import 'registration_screen.dart';
-import '../user/user_home_screen.dart';
-import '../admin/admin_home_screen.dart';
 import 'password_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -23,6 +24,30 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+      }
+    });
+  }
+
+  void _loadSavedCredentials() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedEmail = prefs.getString('remembered_email');
+      if (savedEmail != null && savedEmail.isNotEmpty && mounted) {
+        setState(() {
+          _emailController.text = savedEmail;
+          _rememberDevice = true;
+        });
+      }
+    } catch (_) {}
+  }
+
+  @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
@@ -32,101 +57,106 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
   void _login() async {
+    if (_isLoading) return;
     final email = _emailController.text.trim();
     final password = _passwordController.text;
 
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter your email and password.')),
+        SnackBar(
+          content: Text(tr(context, 'Please enter your email and password.')),
+        ),
       );
       return;
     }
 
+    if (!AccountSecurity.validEmail(email)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(tr(context, 'Please enter a valid email address.')),
+        ),
+      );
+      return;
+    }
     setState(() => _isLoading = true);
+    SessionActivity.authenticationInProgress = true;
 
     try {
-      final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      final remaining = await AccountSecurity.remainingLoginSeconds();
+      if (!mounted) return;
+      if (remaining > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Please wait $remaining seconds before trying again.',
+            ),
+          ),
+        );
+        return;
+      }
+      final userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: password);
 
       final user = userCredential.user;
       if (user != null) {
-        // Fetch role from Firestore
-        final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-        final roleString = doc.data()?['role'] ?? 'user';
-        final role = roleString == 'admin' ? UserRole.admin : UserRole.user;
-
-        await UserService.saveUserRole(role);
+        await AccountSecurity.clearFailures();
         await UserService.setLoggedIn(true);
+
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          if (_rememberDevice) {
+            await prefs.setString('remembered_email', email);
+          } else {
+            await prefs.remove('remembered_email');
+          }
+        } catch (_) {}
 
         if (!mounted) return;
 
-        if (role == UserRole.admin) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
-          );
-        } else {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const UserHomeScreen()),
-          );
-        }
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const AccountGateScreen()),
+          (_) => false,
+        );
       }
     } on FirebaseAuthException catch (e) {
+      if ([
+        'invalid-credential',
+        'wrong-password',
+        'user-not-found',
+        'too-many-requests',
+      ].contains(e.code)) {
+        await AccountSecurity.failedLogin(
+          providerLimited: e.code == 'too-many-requests',
+        );
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Login failed.')),
+        SnackBar(content: Text(AccountSecurity.loginError(e.code))),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('An error occurred: $e')),
+        SnackBar(
+          content: Text(
+            tr(context, 'Sign-in could not be completed. Please retry.'),
+          ),
+        ),
       );
     } finally {
+      SessionActivity.authenticationInProgress = false;
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  void _showNotAvailableMessage(String provider) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$provider sign in is not available yet.')),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppPalette.of(context).surface,
       body: Stack(
         children: [
-          // Background decorations
-          Positioned(
-            top: -MediaQuery.of(context).size.height * 0.1,
-            left: -MediaQuery.of(context).size.width * 0.1,
-            child: Container(
-              width: MediaQuery.of(context).size.width * 0.4,
-              height: MediaQuery.of(context).size.width * 0.4,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primary.withValues(alpha: 0.05),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -MediaQuery.of(context).size.height * 0.05,
-            right: -MediaQuery.of(context).size.width * 0.05,
-            child: Container(
-              width: MediaQuery.of(context).size.width * 0.3,
-              height: MediaQuery.of(context).size.width * 0.3,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.secondary.withValues(alpha: 0.05),
-              ),
-            ),
-          ),
-
           SafeArea(
-            child: Center(
+            child: Align(
+              alignment: const Alignment(0, -0.3),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
                 child: ConstrainedBox(
@@ -134,53 +164,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Branding
-                      Container(
-                        width: 64,
-                        height: 64,
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryContainer,
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.primary.withValues(alpha: 0.1),
-                              blurRadius: 8,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.shield_outlined,
-                          size: 32,
-                          color: AppColors.onPrimaryContainer,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        'SafePaths',
-                        style: GoogleFonts.manrope(
-                          fontSize: 30,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -1.0,
-                          color: AppColors.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Secure access to your guardian network',
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 40),
-
                       // Login card
                       Container(
                         padding: const EdgeInsets.all(32),
                         decoration: BoxDecoration(
-                          color: AppColors.surfaceContainerLowest,
+                          color: AppPalette.of(context).surfaceContainerLowest,
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
@@ -190,20 +178,43 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ],
                           border: Border.all(
-                            color: AppColors.outlineVariant.withValues(alpha: 0.1),
+                            color: AppPalette.of(
+                              context,
+                            ).outlineVariant.withValues(alpha: 0.1),
                           ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // Branding
+                            Text(
+                              'SafePaths',
+                              style: GoogleFonts.manrope(
+                                fontSize: 36,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -1.0,
+                                color: AppPalette.of(context).primary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              tr(context, 'Navigating Your Safety'),
+                              style: GoogleFonts.inter(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: AppPalette.of(context).onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 32),
+
                             // Email
                             Text(
-                              'EMAIL ADDRESS',
+                              tr(context, 'EMAIL ADDRESS'),
                               style: GoogleFonts.inter(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: 1.5,
-                                color: AppColors.onSurfaceVariant,
+                                color: AppPalette.of(context).onSurfaceVariant,
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -211,13 +222,15 @@ class _LoginScreenState extends State<LoginScreen> {
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
                               decoration: InputDecoration(
-                                hintText: 'name@example.com',
+                                hintText: tr(context, 'name@example.com'),
                                 prefixIcon: Icon(
                                   Icons.mail_outlined,
                                   size: 18,
-                                  color: AppColors.outline,
+                                  color: AppPalette.of(context).outline,
                                 ),
-                                fillColor: AppColors.surfaceContainerLow,
+                                fillColor: AppPalette.of(
+                                  context,
+                                ).surfaceContainerLow,
                               ),
                             ),
                             const SizedBox(height: 24),
@@ -227,12 +240,14 @@ class _LoginScreenState extends State<LoginScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  'PASSWORD',
+                                  tr(context, 'PASSWORD'),
                                   style: GoogleFonts.inter(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: 1.5,
-                                    color: AppColors.onSurfaceVariant,
+                                    color: AppPalette.of(
+                                      context,
+                                    ).onSurfaceVariant,
                                   ),
                                 ),
                                 GestureDetector(
@@ -245,11 +260,11 @@ class _LoginScreenState extends State<LoginScreen> {
                                     );
                                   },
                                   child: Text(
-                                    'Forgot Password?',
+                                    tr(context, 'Forgot Password?'),
                                     style: GoogleFonts.inter(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
-                                      color: AppColors.primary,
+                                      color: AppPalette.of(context).primary,
                                     ),
                                   ),
                                 ),
@@ -259,28 +274,35 @@ class _LoginScreenState extends State<LoginScreen> {
                             TextField(
                               controller: _passwordController,
                               obscureText: _obscurePassword,
+                              autocorrect: false,
+                              enableSuggestions: false,
                               decoration: InputDecoration(
                                 hintText: '••••••••',
                                 prefixIcon: Icon(
                                   Icons.lock_outlined,
                                   size: 18,
-                                  color: AppColors.outline,
+                                  color: AppPalette.of(context).outline,
                                 ),
-                                suffixIcon: GestureDetector(
-                                  onTap: () {
+                                suffixIcon: IconButton(
+                                  tooltip: _obscurePassword
+                                      ? tr(context, 'Show password')
+                                      : tr(context, 'Hide password'),
+                                  onPressed: () {
                                     setState(() {
                                       _obscurePassword = !_obscurePassword;
                                     });
                                   },
-                                  child: Icon(
+                                  icon: Icon(
                                     _obscurePassword
-                                        ? Icons.visibility_outlined
-                                        : Icons.visibility_off_outlined,
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
                                     size: 18,
-                                    color: AppColors.outline,
+                                    color: AppPalette.of(context).outline,
                                   ),
                                 ),
-                                fillColor: AppColors.surfaceContainerLow,
+                                fillColor: AppPalette.of(
+                                  context,
+                                ).surfaceContainerLow,
                               ),
                             ),
                             const SizedBox(height: 24),
@@ -298,22 +320,26 @@ class _LoginScreenState extends State<LoginScreen> {
                                         _rememberDevice = val ?? false;
                                       });
                                     },
-                                    activeColor: AppColors.primary,
+                                    activeColor: AppPalette.of(context).primary,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(6),
                                     ),
-                                    side: const BorderSide(
-                                      color: AppColors.outlineVariant,
+                                    side: BorderSide(
+                                      color: AppPalette.of(
+                                        context,
+                                      ).outlineVariant,
                                     ),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
                                 Text(
-                                  'Remember this device',
+                                  tr(context, 'Remember this device'),
                                   style: GoogleFonts.inter(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w500,
-                                    color: AppColors.onSurfaceVariant,
+                                    color: AppPalette.of(
+                                      context,
+                                    ).onSurfaceVariant,
                                   ),
                                 ),
                               ],
@@ -324,30 +350,21 @@ class _LoginScreenState extends State<LoginScreen> {
                             SizedBox(
                               width: double.infinity,
                               child: Container(
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    colors: [
-                                      AppColors.primary,
-                                      AppColors.primaryContainer,
-                                    ],
-                                  ),
-                                  borderRadius: BorderRadius.circular(12),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.primary
-                                          .withValues(alpha: 0.2),
-                                      blurRadius: 16,
-                                      offset: const Offset(0, 4),
-                                    ),
-                                  ],
-                                ),
+                                decoration: AppPalette.of(
+                                  context,
+                                ).primaryActionDecoration(radius: 12),
                                 child: ElevatedButton(
-                                  onPressed: _login,
+                                  onPressed: _isLoading ? null : _login,
                                   style: ElevatedButton.styleFrom(
+                                    surfaceTintColor: Colors.transparent,
+                                    elevation: AppPalette.of(context).isDark
+                                        ? 0
+                                        : null,
                                     backgroundColor: Colors.transparent,
                                     shadowColor: Colors.transparent,
                                     padding: const EdgeInsets.symmetric(
-                                        vertical: 16),
+                                      vertical: 16,
+                                    ),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
                                     ),
@@ -362,10 +379,11 @@ class _LoginScreenState extends State<LoginScreen> {
                                           ),
                                         )
                                       : Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
                                           children: [
                                             Text(
-                                              'Login',
+                                              tr(context, 'Login'),
                                               style: GoogleFonts.inter(
                                                 fontSize: 18,
                                                 fontWeight: FontWeight.w700,
@@ -387,63 +405,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
 
-                      // Divider
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 32),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Divider(
-                                color:
-                                    AppColors.outlineVariant.withValues(alpha: 0.3),
-                              ),
-                            ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              child: Text(
-                                'OR CONTINUE WITH',
-                                style: GoogleFonts.inter(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 2.0,
-                                  color: AppColors.outline,
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: Divider(
-                                color:
-                                    AppColors.outlineVariant.withValues(alpha: 0.3),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Social buttons
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _SocialButton(
-                              icon: Icons.g_mobiledata,
-                              label: 'Google',
-                              onTap: () =>
-                                  _showNotAvailableMessage('Google'),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _SocialButton(
-                              icon: Icons.apple,
-                              label: 'Apple',
-                              onTap: () => _showNotAvailableMessage('Apple'),
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 40),
+                      const SizedBox(height: 32),
 
                       // Register link
                       Wrap(
@@ -451,11 +413,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           Text(
-                            "Don't have an account? ",
+                            tr(context, "Don't have an account? "),
                             style: GoogleFonts.inter(
                               fontSize: 15,
                               fontWeight: FontWeight.w500,
-                              color: AppColors.onSurfaceVariant,
+                              color: AppPalette.of(context).onSurfaceVariant,
                             ),
                           ),
                           GestureDetector(
@@ -467,11 +429,11 @@ class _LoginScreenState extends State<LoginScreen> {
                               );
                             },
                             child: Text(
-                              'Register',
+                              tr(context, 'Register'),
                               style: GoogleFonts.inter(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
-                                color: AppColors.primary,
+                                color: AppPalette.of(context).primary,
                               ),
                             ),
                           ),
@@ -485,50 +447,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SocialButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _SocialButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: AppColors.outlineVariant.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 20, color: AppColors.onSurfaceVariant),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: AppColors.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

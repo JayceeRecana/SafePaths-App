@@ -1,0 +1,24 @@
+{
+  "id": "spark-normal-form-road",
+  "retired": true,
+  "retirementReason": "Retired after interfering with native baseline navigation. Do not recreate; agree on a public test segment before a future drill.",
+  "studyArea": "nearby_test",
+  "latitude": 14.676139,
+  "longitude": 121.009417,
+  "name": "[TEST ONLY] Normal reporting fixture",
+  "status": "not_passable",
+  "notes": "Synthetic test road and closure. This is not a real flood or emergency.",
+  "geometry": {
+    "type": "LineString",
+    "segments": [{"points": [{"lon": 121.009417, "lat": 14.675139}, {"lon": 121.009417, "lat": 14.677139}]}]
+  },
+  "source": "synthetic_test",
+  "isVerified": false,
+  "confidence": 0,
+  "riskScore": 100,
+  "riskCategory": "Danger",
+  "vulnerability": "high",
+  "neighbors": [],
+  "proofFixtureVersion": 1,
+  "proofScope": "normal_report_form"
+}

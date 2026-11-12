@@ -1,12 +1,14 @@
+import '../../theme/app_palette.dart';
+import '../../l10n/app_strings.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../theme/app_colors.dart';
+import '../../utils/password_policy.dart';
+import '../../services/account_security.dart';
 import '../../services/user_service.dart';
 import 'login_screen.dart';
-import '../user/user_home_screen.dart';
-import '../admin/admin_home_screen.dart';
+import 'account_gate_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -16,140 +18,138 @@ class RegistrationScreen extends StatefulWidget {
 }
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
-  int _selectedRole = 0; // 0 = User, 1 = Barangay Official
   bool _agreedToTerms = false;
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  final _inviteCodeController = TextEditingController();
 
   bool _isLoading = false;
+  bool _hidePassword = true;
+  bool _hideConfirmation = true;
 
   void _register() async {
+    if (_isLoading) return;
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text;
     final confirmPassword = _confirmPasswordController.text;
 
-    if (name.isEmpty || email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
+    if (name.isEmpty ||
+        email.isEmpty ||
+        password.isEmpty ||
+        confirmPassword.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete all required fields.')),
+        SnackBar(
+          content: Text(tr(context, 'Please complete all required fields.')),
+        ),
       );
       return;
     }
 
     if (!email.contains('@') || !email.contains('.')) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid email address.')),
+        SnackBar(
+          content: Text(tr(context, 'Please enter a valid email address.')),
+        ),
+      );
+      return;
+    }
+
+    if (!PasswordPolicy.isValid(password)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(PasswordPolicy.requirements)),
       );
       return;
     }
 
     if (password != confirmPassword) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passwords do not match.')),
+        SnackBar(content: Text(tr(context, 'Passwords do not match.'))),
       );
       return;
     }
 
-    if (_selectedRole == 1) {
-      final code = _inviteCodeController.text.trim();
-      if (code.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invite code is required for Barangay Officials.')),
-        );
-        return;
-      }
-    }
-
     if (!_agreedToTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please agree to the terms to continue.')),
+        SnackBar(
+          content: Text(tr(context, 'Please agree to the terms to continue.')),
+        ),
       );
       return;
     }
 
     setState(() => _isLoading = true);
+    SessionActivity.authenticationInProgress = true;
 
     try {
-      if (_selectedRole == 1) {
-        final code = _inviteCodeController.text.trim();
-        final configDoc = await FirebaseFirestore.instance.collection('config').doc('inviteCodes').get();
-        String? validCode;
-        if (configDoc.exists && configDoc.data() != null && configDoc.data()!.containsKey('barangay_official')) {
-          validCode = configDoc.data()!['barangay_official'] as String;
-        }
-
-        if (validCode == null) {
-          setState(() => _isLoading = false);
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Unable to verify invitation code. Please try again later.')),
-          );
-          return;
-        }
-
-        if (code != validCode) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Invalid Invite Code.')),
-          );
-          return;
-        }
-      }
-
-      final userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      final userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(email: email, password: password);
 
       final user = userCredential.user;
       if (user != null) {
-        // Save user role and metadata to Firestore
-        final roleString = _selectedRole == 0 ? 'user' : 'admin';
-        
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'name': name,
-          'email': email,
-          'role': roleString,
-          'trustScore': 50,
-          'verifiedReports': 0,
-          'dismissedReports': 0,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+        try {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .set({
+                'name': name,
+                'email': email,
+                'role': 'user',
+                'trustScore': 50,
+                'verifiedReports': 0,
+                'dismissedReports': 0,
+                'createdAt': FieldValue.serverTimestamp(),
+              })
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {
+          /* Profile setup is retried after email verification. */
+        }
 
-        final role = _selectedRole == 0 ? UserRole.user : UserRole.admin;
-        await UserService.saveUserRole(role);
+        await UserService.saveUserRole(UserRole.user);
         await UserService.setLoggedIn(true);
 
         if (!mounted) return;
 
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Registration successful.')),
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                'Account created. Please verify your email to continue.',
+              ),
+            ),
+          ),
         );
-        if (_selectedRole == 0) {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const UserHomeScreen()),
-            (route) => false,
-          );
-        } else {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const AdminHomeScreen()),
-            (route) => false,
-          );
-        }
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (_) =>
+                const AccountGateScreen(sendVerificationOnOpen: true),
+          ),
+          (route) => false,
+        );
       }
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Registration failed.')),
+        SnackBar(
+          content: Text(e.message ?? tr(context, 'Registration failed.')),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('An error occurred: $e')),
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              'Account setup could not be completed. If your account was created, sign in to finish setup.',
+            ),
+          ),
+        ),
       );
     } finally {
+      SessionActivity.authenticationInProgress = false;
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -160,14 +160,13 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
-    _inviteCodeController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppPalette.of(context).surface,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -179,7 +178,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   width: double.infinity,
                   constraints: const BoxConstraints(maxWidth: 480),
                   decoration: BoxDecoration(
-                    color: AppColors.surfaceContainerLowest,
+                    color: AppPalette.of(context).surfaceContainerLowest,
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
                       BoxShadow(
@@ -204,204 +203,166 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                             fontSize: 24,
                             fontWeight: FontWeight.w800,
                             letterSpacing: -0.5,
-                            color: AppColors.primary,
+                            color: AppPalette.of(context).primary,
                           ),
                         ),
                         const SizedBox(height: 24),
 
                         Text(
-                          'Create Account',
+                          tr(context, 'Create Account'),
                           style: GoogleFonts.manrope(
                             fontSize: 28,
                             fontWeight: FontWeight.w700,
                             letterSpacing: -0.5,
-                            color: AppColors.onSurface,
+                            color: AppPalette.of(context).onSurface,
                           ),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Complete the details below to register.',
+                          tr(
+                            context,
+                            'Complete the details below to register.',
+                          ),
                           style: GoogleFonts.inter(
                             fontSize: 15,
-                            color: AppColors.onSurfaceVariant,
+                            color: AppPalette.of(context).onSurfaceVariant,
                           ),
                         ),
                         const SizedBox(height: 32),
 
-                        // Role selection
-                        Text(
-                          'IDENTITY ROLE',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 2.0,
-                            color: AppColors.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceContainerLow,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: _RoleButton(
-                                  label: 'User',
-                                  isSelected: _selectedRole == 0,
-                                  onTap: () =>
-                                      setState(() => _selectedRole = 0),
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: _RoleButton(
-                                  label: 'Barangay Official',
-                                  isSelected: _selectedRole == 1,
-                                  onTap: () =>
-                                      setState(() => _selectedRole = 1),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-
-                        // Invite Code (Conditional)
-                        if (_selectedRole == 1) ...[
-                          _FieldLabel(label: 'OFFICIAL INVITE CODE'),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _inviteCodeController,
-                            decoration: InputDecoration(
-                              hintText: 'Enter access code',
-                              prefixIcon: const Icon(Icons.key_outlined,
-                                  size: 18, color: AppColors.tertiary),
-                              fillColor: AppColors.surfaceContainerHigh,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                        ],
-
                         // Full Name
-                        _FieldLabel(label: 'FULL NAME'),
+                        _FieldLabel(label: tr(context, 'FULL NAME')),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _nameController,
                           decoration: InputDecoration(
-                            hintText: 'Johnathan Doe',
-                            prefixIcon: const Icon(Icons.person_outlined,
-                                size: 18, color: AppColors.outline),
-                            fillColor: AppColors.surfaceContainerHigh,
+                            hintText: tr(context, 'Johnathan Doe'),
+                            prefixIcon: Icon(
+                              Icons.person_outlined,
+                              size: 18,
+                              color: AppPalette.of(context).outline,
+                            ),
+                            fillColor: AppPalette.of(
+                              context,
+                            ).surfaceContainerHigh,
                           ),
                         ),
                         const SizedBox(height: 20),
 
                         // Email
-                        _FieldLabel(label: 'EMAIL ADDRESS'),
+                        _FieldLabel(label: tr(context, 'EMAIL ADDRESS')),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
                           decoration: InputDecoration(
-                            hintText: 'john@example.com',
-                            prefixIcon: const Icon(Icons.mail_outlined,
-                                size: 18, color: AppColors.outline),
-                            fillColor: AppColors.surfaceContainerHigh,
+                            hintText: tr(context, 'john@example.com'),
+                            prefixIcon: Icon(
+                              Icons.mail_outlined,
+                              size: 18,
+                              color: AppPalette.of(context).outline,
+                            ),
+                            fillColor: AppPalette.of(
+                              context,
+                            ).surfaceContainerHigh,
                           ),
                         ),
                         const SizedBox(height: 20),
 
-                        // Password row
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final isNarrow = constraints.maxWidth < 360;
-                            if (isNarrow) {
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _FieldLabel(label: 'PASSWORD'),
-                                  const SizedBox(height: 8),
-                                  TextField(
-                                    controller: _passwordController,
-                                    obscureText: true,
-                                    decoration: InputDecoration(
-                                      hintText: '••••••••',
-                                      prefixIcon: const Icon(
-                                          Icons.lock_outlined,
-                                          size: 18,
-                                          color: AppColors.outline),
-                                      fillColor: AppColors.surfaceContainerHigh,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 20),
-                                  _FieldLabel(label: 'CONFIRM'),
-                                  const SizedBox(height: 8),
-                                  TextField(
-                                    controller: _confirmPasswordController,
-                                    obscureText: true,
-                                    decoration: InputDecoration(
-                                      hintText: '••••••••',
-                                      prefixIcon: const Icon(
-                                          Icons.verified_outlined,
-                                          size: 18,
-                                          color: AppColors.outline),
-                                      fillColor: AppColors.surfaceContainerHigh,
-                                    ),
-                                  ),
-                                ],
-                              );
-                            }
-                            return Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      _FieldLabel(label: 'PASSWORD'),
-                                      const SizedBox(height: 8),
-                                      TextField(
-                                        controller: _passwordController,
-                                        obscureText: true,
-                                        decoration: InputDecoration(
-                                          hintText: '••••••••',
-                                          prefixIcon: const Icon(
-                                              Icons.lock_outlined,
-                                              size: 18,
-                                              color: AppColors.outline),
-                                          fillColor: AppColors.surfaceContainerHigh,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      _FieldLabel(label: 'CONFIRM'),
-                                      const SizedBox(height: 8),
-                                      TextField(
-                                        controller: _confirmPasswordController,
-                                        obscureText: true,
-                                        decoration: InputDecoration(
-                                          hintText: '••••••••',
-                                          prefixIcon: const Icon(
-                                              Icons.verified_outlined,
-                                              size: 18,
-                                              color: AppColors.outline),
-                                          fillColor: AppColors.surfaceContainerHigh,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
+                        _FieldLabel(label: tr(context, 'PASSWORD')),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _passwordController,
+                          obscureText: _hidePassword,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            hintText: tr(context, 'Enter a password'),
+                            prefixIcon: const Icon(Icons.lock_outlined),
+                            suffixIcon: IconButton(
+                              tooltip: _hidePassword
+                                  ? tr(context, 'Show password')
+                                  : tr(context, 'Hide password'),
+                              icon: Icon(
+                                _hidePassword
+                                    ? Icons.visibility_off
+                                    : Icons.visibility,
+                              ),
+                              onPressed: () => setState(
+                                () => _hidePassword = !_hidePassword,
+                              ),
+                            ),
+                            fillColor: AppPalette.of(
+                              context,
+                            ).surfaceContainerHigh,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        LinearProgressIndicator(
+                          value:
+                              PasswordPolicy.score(_passwordController.text) /
+                              5,
+                          color:
+                              PasswordPolicy.isValid(_passwordController.text)
+                              ? AppPalette.of(context).secondary
+                              : AppPalette.of(context).primary,
+                          backgroundColor: AppPalette.of(
+                            context,
+                          ).surfaceContainerHigh,
+                          semanticsLabel: 'Password requirements met',
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          PasswordPolicy.requirements,
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: AppPalette.of(context).onSurfaceVariant,
+                          ),
+                        ),
+                        if (_passwordController.text.isNotEmpty)
+                          Text(
+                            'Requirements met: ${PasswordPolicy.score(_passwordController.text)}/5',
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              color: AppPalette.of(context).onSurfaceVariant,
+                            ),
+                          ),
+                        const SizedBox(height: 20),
+                        _FieldLabel(label: tr(context, 'CONFIRM PASSWORD')),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _confirmPasswordController,
+                          obscureText: _hideConfirmation,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            hintText: tr(context, 'Re-enter your password'),
+                            errorText:
+                                _confirmPasswordController.text.isNotEmpty &&
+                                    _confirmPasswordController.text !=
+                                        _passwordController.text
+                                ? tr(context, 'Passwords do not match.')
+                                : null,
+                            prefixIcon: const Icon(Icons.verified_outlined),
+                            suffixIcon: IconButton(
+                              tooltip: _hideConfirmation
+                                  ? tr(context, 'Show confirmation password')
+                                  : tr(context, 'Hide confirmation password'),
+                              icon: Icon(
+                                _hideConfirmation
+                                    ? Icons.visibility_off
+                                    : Icons.visibility,
+                              ),
+                              onPressed: () => setState(
+                                () => _hideConfirmation = !_hideConfirmation,
+                              ),
+                            ),
+                            fillColor: AppPalette.of(
+                              context,
+                            ).surfaceContainerHigh,
+                          ),
                         ),
                         const SizedBox(height: 24),
 
@@ -419,12 +380,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                     _agreedToTerms = val ?? false;
                                   });
                                 },
-                                activeColor: AppColors.primary,
+                                activeColor: AppPalette.of(context).primary,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(6),
                                 ),
-                                side: const BorderSide(
-                                  color: AppColors.outlineVariant,
+                                side: BorderSide(
+                                  color: AppPalette.of(context).outlineVariant,
                                 ),
                               ),
                             ),
@@ -434,25 +395,29 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                 text: TextSpan(
                                   style: GoogleFonts.inter(
                                     fontSize: 13,
-                                    color: AppColors.onSurfaceVariant,
+                                    color: AppPalette.of(
+                                      context,
+                                    ).onSurfaceVariant,
                                   ),
                                   children: [
-                                    const TextSpan(text: 'I agree to the '),
                                     TextSpan(
-                                      text: 'Terms of Service',
+                                      text: tr(context, 'I agree to the '),
+                                    ),
+                                    TextSpan(
+                                      text: tr(context, 'Terms of Service'),
                                       style: GoogleFonts.inter(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
-                                        color: AppColors.primary,
+                                        color: AppPalette.of(context).primary,
                                       ),
                                     ),
-                                    const TextSpan(text: ' and '),
+                                    TextSpan(text: tr(context, ' and ')),
                                     TextSpan(
-                                      text: 'Privacy Policy',
+                                      text: tr(context, 'Privacy Policy'),
                                       style: GoogleFonts.inter(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
-                                        color: AppColors.primary,
+                                        color: AppPalette.of(context).primary,
                                       ),
                                     ),
                                     const TextSpan(text: '.'),
@@ -468,30 +433,21 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: Container(
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [
-                                  AppColors.primary,
-                                  AppColors.primaryContainer,
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color:
-                                      AppColors.primary.withValues(alpha: 0.2),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
+                            decoration: AppPalette.of(
+                              context,
+                            ).primaryActionDecoration(radius: 16),
                             child: ElevatedButton(
-                              onPressed: _register,
+                              onPressed: _isLoading ? null : _register,
                               style: ElevatedButton.styleFrom(
+                                surfaceTintColor: Colors.transparent,
+                                elevation: AppPalette.of(context).isDark
+                                    ? 0
+                                    : null,
                                 backgroundColor: Colors.transparent,
                                 shadowColor: Colors.transparent,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 16),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(16),
                                 ),
@@ -506,7 +462,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                       ),
                                     )
                                   : Text(
-                                      'Register',
+                                      tr(context, 'Register'),
                                       style: GoogleFonts.manrope(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w700,
@@ -524,14 +480,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 const SizedBox(height: 24),
 
                 // Login link
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 4,
+                  runSpacing: 4,
                   children: [
                     Text(
-                      'Already have an account? ',
+                      tr(context, 'Already have an account? '),
                       style: GoogleFonts.inter(
                         fontSize: 15,
-                        color: AppColors.onSurfaceVariant,
+                        color: AppPalette.of(context).onSurfaceVariant,
                       ),
                     ),
                     GestureDetector(
@@ -543,50 +501,15 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         );
                       },
                       child: Text(
-                        'Login',
+                        tr(context, 'Login'),
                         style: GoogleFonts.inter(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
+                          color: AppPalette.of(context).primary,
                         ),
                       ),
                     ),
                   ],
-                ),
-
-                const SizedBox(height: 24),
-
-                // System online badge
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.secondary.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(100),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.secondary,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'SYSTEM ONLINE',
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 2.0,
-                          color: AppColors.secondary,
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ),
@@ -611,59 +534,7 @@ class _FieldLabel extends StatelessWidget {
           fontSize: 11,
           fontWeight: FontWeight.w700,
           letterSpacing: 2.0,
-          color: AppColors.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-}
-
-class _RoleButton extends StatelessWidget {
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _RoleButton({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-        decoration: BoxDecoration(
-          color:
-              isSelected ? AppColors.surfaceContainerLowest : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
-                  ),
-                ]
-              : null,
-          border: isSelected
-              ? Border.all(color: Colors.black.withValues(alpha: 0.05))
-              : null,
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: isSelected
-                  ? AppColors.primary
-                  : AppColors.onSurfaceVariant,
-            ),
-          ),
+          color: AppPalette.of(context).onSurfaceVariant,
         ),
       ),
     );

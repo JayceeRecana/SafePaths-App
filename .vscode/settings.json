@@ -1,0 +1,44 @@
+{
+  "dart.flutterSdkPath": "C:\\flutter",
+  "dart.flutterHotReloadOnSave": "all",
+  "files.exclude": {
+    "**/.dart_tool": true,
+    "**/build": true,
+    "**/node_modules": true,
+    ".usability-work-baseline": true,
+    ".performance-work-baseline": true,
+    ".performance-results": true,
+    ".tmp-pdf-reader": true,
+    ".analysis-*.txt": true,
+    ".tests-*.txt": true,
+    ".emulator-*.txt": true,
+    ".build-*.txt": true,
+    ".android-*-probe.txt": true,
+    ".parity-*.txt": true,
+    "firebase-debug.log": true,
+    "firestore-debug.log": true,
+    "ui-debug.log": true,
+    ".flutter-plugins-dependencies": true,
+    ".env.server-only.backup": true,
+    "Microsoft": true
+  },
+  "search.exclude": {
+    "**/.dart_tool/**": true,
+    "**/build/**": true,
+    "**/node_modules/**": true,
+    ".usability-work-baseline/**": true,
+    ".performance-work-baseline/**": true,
+    ".performance-results/**": true,
+    ".tmp-pdf-reader/**": true,
+    "Microsoft/**": true
+  },
+  "files.watcherExclude": {
+    "**/build/**": true,
+    "**/node_modules/**": true,
+    ".usability-work-baseline/**": true,
+    ".performance-work-baseline/**": true,
+    ".performance-results/**": true,
+    ".tmp-pdf-reader/**": true
+  },
+  "python.terminal.useEnvFile": true
+}

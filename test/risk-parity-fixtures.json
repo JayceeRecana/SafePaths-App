@@ -1,0 +1,609 @@
+[
+  {
+    "name": "clear passable",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 0,
+        "riskCategory": "Safe",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "closure 0 minutes",
+    "roads": [
+      {
+        "id": "r",
+        "status": "not_passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [],
+    "weather": "heavyRain",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 100,
+        "riskCategory": "Critical",
+        "warningStartTime": 1760000000000,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "closure 30 minutes",
+    "roads": [
+      {
+        "id": "r",
+        "status": "not_passable",
+        "vulnerability": "medium",
+        "updatedAt": 1759998200000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [],
+    "weather": "heavyRain",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 100,
+        "riskCategory": "Critical",
+        "warningStartTime": 1759998200000,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "closure 60 minutes",
+    "roads": [
+      {
+        "id": "r",
+        "status": "not_passable",
+        "vulnerability": "medium",
+        "updatedAt": 1759996400000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [],
+    "weather": "heavyRain",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 100,
+        "riskCategory": "Critical",
+        "warningStartTime": 1759996400000,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "closure 121 minutes",
+    "roads": [
+      {
+        "id": "r",
+        "status": "not_passable",
+        "vulnerability": "medium",
+        "updatedAt": 1759992740000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [],
+    "weather": "heavyRain",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 80,
+        "riskCategory": "Critical",
+        "warningStartTime": 1759992740000,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "propagation",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "high",
+        "updatedAt": 1760000000000,
+        "neighbors": [
+          "n"
+        ],
+        "riskScore": 0
+      },
+      {
+        "id": "n",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 100
+      }
+    ],
+    "reports": [],
+    "weather": "typhoon",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 95,
+        "riskCategory": "Critical",
+        "warningStartTime": 1760000000000,
+        "propagationSource": "n"
+      },
+      {
+        "id": "n",
+        "riskScore": 0,
+        "riskCategory": "Safe",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "pending report",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "a",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "pending",
+        "createdAt": 1760000000000,
+        "authorityScore": 50
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 36,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "agreement",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "a",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "pending",
+        "createdAt": 1760000000000,
+        "authorityScore": 50
+      },
+      {
+        "id": "b",
+        "roadId": "r",
+        "userId": "v",
+        "severity": "High",
+        "status": "pending",
+        "createdAt": 1760000000000,
+        "authorityScore": 50
+      }
+    ],
+    "weather": "heavyRain",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 100,
+        "riskCategory": "Critical",
+        "warningStartTime": 1760000000000,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "same account duplicate",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "a",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "pending",
+        "createdAt": 1760000000000,
+        "authorityScore": 50
+      },
+      {
+        "id": "b",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "pending",
+        "createdAt": 1760000000000,
+        "authorityScore": 50
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 36,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "outdated incident retains caution",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0,
+        "communityCondition": "outdated"
+      }
+    ],
+    "reports": [],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 30,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "under review retains report contribution",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "a",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "under_review",
+        "createdAt": 1760000000000,
+        "authorityScore": 50
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 36,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "old observation is not refreshed by upload",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0,
+        "communityCondition": "outdated"
+      }
+    ],
+    "reports": [
+      {
+        "id": "a",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "under_review",
+        "createdAt": 1760000000000,
+        "authorityScore": 50,
+        "observedAt": 1759910000000
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 30,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "consensus uses observation rather than original creation time",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "a",
+        "roadId": "r",
+        "userId": "u",
+        "severity": "High",
+        "status": "under_review",
+        "createdAt": 1759827200000,
+        "authorityScore": 50,
+        "observedAt": 1760000000000
+      },
+      {
+        "id": "b",
+        "roadId": "r",
+        "userId": "v",
+        "severity": "High",
+        "status": "under_review",
+        "createdAt": 1760000000000,
+        "authorityScore": 50,
+        "observedAt": 1760000000000
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 97.5,
+        "riskCategory": "Critical",
+        "warningStartTime": 1760000000000,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "road reopening leaves historical follow-up review pending without flood risk",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "historical",
+        "userId": "u",
+        "roadId": "r",
+        "status": "pending",
+        "reportType": "followup",
+        "incidentReviewStatus": "passable",
+        "severity": "High",
+        "authorityScore": 80,
+        "createdAt": 1760000000000
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 0,
+        "riskCategory": "Safe",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "same resident follow-ups count once at latest observation",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "old",
+        "userId": "u",
+        "roadId": "r",
+        "status": "pending",
+        "severity": "High",
+        "authorityScore": 80,
+        "createdAt": 1759999999000
+      },
+      {
+        "id": "new",
+        "userId": "u",
+        "roadId": "r",
+        "status": "pending",
+        "severity": "High",
+        "authorityScore": 80,
+        "createdAt": 1760000000000,
+        "reportType": "followup"
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 48,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "latest lower-water observation supersedes older pending severity",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "old",
+        "userId": "u",
+        "roadId": "r",
+        "status": "pending",
+        "severity": "High",
+        "authorityScore": 80,
+        "createdAt": 1759999999000
+      },
+      {
+        "id": "new",
+        "userId": "u",
+        "roadId": "r",
+        "status": "pending",
+        "severity": "Low",
+        "authorityScore": 80,
+        "createdAt": 1760000000000,
+        "reportType": "followup"
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 12,
+        "riskCategory": "Safe",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  },
+  {
+    "name": "historical follow-up cannot corroborate a new hazard",
+    "roads": [
+      {
+        "id": "r",
+        "status": "passable",
+        "vulnerability": "medium",
+        "updatedAt": 1760000000000,
+        "neighbors": [],
+        "riskScore": 0
+      }
+    ],
+    "reports": [
+      {
+        "id": "new",
+        "userId": "u",
+        "roadId": "r",
+        "status": "pending",
+        "severity": "High",
+        "authorityScore": 80,
+        "createdAt": 1760000000000
+      },
+      {
+        "id": "historical",
+        "userId": "other",
+        "roadId": "r",
+        "status": "pending",
+        "severity": "High",
+        "authorityScore": 80,
+        "createdAt": 1760000000000,
+        "reportType": "followup",
+        "incidentReviewStatus": "passable"
+      }
+    ],
+    "weather": "clear",
+    "now": 1760000000000,
+    "expected": [
+      {
+        "id": "r",
+        "riskScore": 48,
+        "riskCategory": "Watch",
+        "warningStartTime": null,
+        "propagationSource": null
+      }
+    ]
+  }
+]

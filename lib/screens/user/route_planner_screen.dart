@@ -1,26 +1,50 @@
-import 'dart:convert';
+import '../../widgets/route_navigation.dart';
+import '../../theme/app_palette.dart';
+import '../../l10n/app_strings.dart';
+import '../../config/app_environment.dart';
+import '../../data/marulas_landmarks.dart';
+import '../../data/marulas_evacuation_sites.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' hide Size;
-import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import '../../theme/app_colors.dart';
 import '../../widgets/app_map.dart';
 import '../../widgets/app_top_bar.dart';
+import '../../widgets/planner_route_card.dart';
+import '../../widgets/planner_travel_selector.dart';
+import '../../services/weather_service.dart';
 import '../../services/routing_service.dart';
+import '../../services/app_state_service.dart';
+import '../../services/mapbox_place_search.dart';
 import '../../models/planned_route.dart';
-import 'navigation_screen.dart';
+import '../../utils/geo_utils.dart';
+import '../../utils/place_search.dart';
 import 'route_preview_screen.dart';
+import 'location_picker_screen.dart';
 
 class RoutePlannerScreen extends StatefulWidget {
   final Position? prefilledDestination;
   final String? prefilledName;
+  // Replace platform/provider boundaries for real-screen regression tests.
+  final Future<Position?> Function()? locate;
+  final DirectionsFetcher? directionsFetcher;
+  final Future<List<MapboxPlace>> Function(String, List<String>)? placeLookup;
+  final Future<Position?> Function(BuildContext, MarulasLandmark)?
+  quickDestinationPicker;
+  final Widget Function(List<Position>)? routeMapBuilder;
+  final List<MarulasLandmark>? quickLandmarks;
 
   const RoutePlannerScreen({
     super.key,
     this.prefilledDestination,
     this.prefilledName,
+    this.locate,
+    this.directionsFetcher,
+    this.placeLookup,
+    this.quickDestinationPicker,
+    this.routeMapBuilder,
+    this.quickLandmarks,
   });
 
   @override
@@ -31,10 +55,101 @@ class _RoutePlannerScreenState extends State<RoutePlannerScreen> {
   final RoutingService _routingService = RoutingService.instance;
   final TextEditingController _originController = TextEditingController();
   final TextEditingController _destinationController = TextEditingController();
-  
+  final TextEditingController _lookupController = TextEditingController();
+
   Timer? _debounce;
+  int _searchId = 0;
+  String? _searchMessage;
   List<Map<String, dynamic>> _destinationSuggestions = [];
   bool _isSearching = false;
+  final _searchUpdates = ValueNotifier<int>(0);
+  final _searchFocus = FocusNode();
+  bool _destinationSearchOpen = false;
+  BuildContext? _destinationSearchContext;
+  int? _session;
+  bool _openingNavigation = false;
+  QuickDestinationCategory? _quickCategory;
+  String? _resolvingSite;
+  bool _confirmingQuickDestination = false;
+  MapboxMap? _previewMap;
+  void _beginPlanning({Position? prefillDestination, String? name}) {
+    _session = _routingService.startPlanning(
+      prefillDestination: prefillDestination,
+      name: name,
+      locate: widget.locate,
+    );
+  }
+
+  Future<void> _navigate(PlannedRoute route) async {
+    if (_openingNavigation) return;
+    _openingNavigation = true;
+    try {
+      await startRouteNavigation(context, route);
+    } finally {
+      _openingNavigation = false;
+    }
+  }
+
+  void _update(VoidCallback change) {
+    if (!mounted) return;
+    setState(change);
+    _searchUpdates.value++;
+  }
+
+  Future<void> _openDestinationSearch() async {
+    if (_destinationSearchOpen) return;
+    _destinationSearchOpen = true;
+    if (_lookupController.text.trim().isNotEmpty && _quickCategory == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _destinationSearchOpen)
+          _onSearchChanged(_lookupController.text);
+      });
+    }
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (routeContext) {
+            _destinationSearchContext = routeContext;
+            return ValueListenableBuilder<int>(
+              valueListenable: _searchUpdates,
+              builder: (context, _, child) => _buildDestinationSearch(context),
+            );
+          },
+        ),
+      );
+    } finally {
+      _destinationSearchOpen = false;
+      _destinationSearchContext = null;
+      _debounce?.cancel();
+      _searchId++;
+      if (mounted)
+        _update(() {
+          _isSearching = false;
+          _resolvingSite = null;
+          _destinationSuggestions = [];
+          _quickCategory = null;
+          _searchMessage = null;
+        });
+    }
+  }
+
+  void _closeDestinationSearchIfChosen(Position? previous) {
+    final screen = _destinationSearchContext;
+    if (_routingService.destinationPoint != null &&
+        !identical(_routingService.destinationPoint, previous) &&
+        screen != null &&
+        screen.mounted &&
+        ModalRoute.of(screen)?.isCurrent == true) {
+      _lookupController.clear();
+      Navigator.of(screen).pop();
+    }
+  }
+
+  Future<void> _chooseSearchResult(Map<String, dynamic> feature) async {
+    final previous = _routingService.destinationPoint;
+    await _selectDestination(feature);
+    if (mounted) _closeDestinationSearchIfChosen(previous);
+  }
 
   // Retrieve the mapbox token from environment
   final String _mapboxToken = dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '';
@@ -44,7 +159,8 @@ class _RoutePlannerScreenState extends State<RoutePlannerScreen> {
     super.initState();
     _routingService.addListener(_onRoutingStateChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _routingService.startPlanning(
+      if (!mounted) return;
+      _beginPlanning(
         prefillDestination: widget.prefilledDestination,
         name: widget.prefilledName,
       );
@@ -57,610 +173,822 @@ class _RoutePlannerScreenState extends State<RoutePlannerScreen> {
   @override
   void dispose() {
     _routingService.removeListener(_onRoutingStateChanged);
+    if (_session == _routingService.planningSessionId)
+      _routingService.exitPlanning(notify: false);
+    _searchFocus.dispose();
+    _searchUpdates.dispose();
     _originController.dispose();
     _destinationController.dispose();
+    _lookupController.dispose();
     _debounce?.cancel();
     super.dispose();
   }
 
   void _onRoutingStateChanged() {
-    setState(() {});
+    if (mounted) _update(() {});
   }
 
   void _onSearchChanged(String query) {
+    _quickCategory = null;
+    _resolvingSite = null;
+    _destinationSuggestions = [];
+    if (!_destinationSearchOpen) _routingService.clearDestination();
+    _searchId++;
+    _searchMessage = null;
     if (_debounce?.isActive ?? false) _debounce!.cancel();
-    
-    if (query.trim().isEmpty) {
-      setState(() {
+
+    if (query.trim().length < 2) {
+      _update(() {
         _destinationSuggestions = [];
         _isSearching = false;
       });
       return;
     }
 
-    setState(() {
+    _update(() {
       _isSearching = true;
     });
 
-    _debounce = Timer(const Duration(milliseconds: 500), () {
+    _debounce = Timer(const Duration(milliseconds: 350), () {
       _fetchSuggestions(query.trim());
     });
   }
 
-  // Hardcoded Valenzuela Landmarks for Capstone Demo
-  // This ensures perfect, free, and instant POI results without relying on external API quirks.
-  static const List<Map<String, dynamic>> _localLandmarks = [
-    {
-      'text': 'Our Lady of Fatima University',
-      'place_name': 'Our Lady of Fatima University, MacArthur Highway, Marulas, Valenzuela',
-      'center': [120.9783, 14.6788], // Lng, Lat
-    },
-    {
-      'text': 'SM City Valenzuela',
-      'place_name': 'SM City Valenzuela, MacArthur Highway, Karuhatan, Valenzuela',
-      'center': [120.9772, 14.6795],
-    },
-    {
-      'text': 'Valenzuela Medical Center',
-      'place_name': 'Valenzuela Medical Center, Padrigal St, Karuhatan, Valenzuela',
-      'center': [120.9765, 14.6858],
-    },
-    {
-      'text': 'Valenzuela City Emergency Hospital',
-      'place_name': 'Valenzuela City Emergency Hospital, Dalandanan, Valenzuela',
-      'center': [120.9715, 14.6853],
-    },
-    {
-      'text': 'Dalandanan National High School (Evacuation)',
-      'place_name': 'Dalandanan National High School, Dalandanan, Valenzuela',
-      'center': [120.9632, 14.6953],
-    },
-    {
-      'text': 'Valenzuela City Hall',
-      'place_name': 'Valenzuela City Hall, MacArthur Highway, Malinta, Valenzuela',
-      'center': [120.9660, 14.7011],
-    },
-    {
-      'text': 'Valenzuela Police Station',
-      'place_name': 'Valenzuela Police Station, MacArthur Highway, Valenzuela',
-      'center': [120.9665, 14.7005],
-    },
-  ];
+  void _showQuickDestinations(QuickDestinationCategory category, String label) {
+    _debounce?.cancel();
+    _searchId++;
+    _resolvingSite = null;
+    if (!_destinationSearchOpen) _routingService.clearDestination();
+    if (_destinationSearchOpen)
+      _lookupController.clear();
+    else
+      _destinationController.clear();
+    FocusScope.of(context).unfocus();
+    final places = MarulasLandmarksCatalog.quickDestinations(
+      category,
+      widget.quickLandmarks ?? AppEnvironment.area.landmarks,
+      isInScope: (lat, lng) =>
+          GeoUtils.isInsideStudyArea(lat, lng, bufferMeters: 80),
+    );
+    final listedEvacuationSites =
+        category == QuickDestinationCategory.evacuationCenters &&
+            widget.quickLandmarks == null &&
+            !AppEnvironment.isFieldTest
+        ? MarulasEvacuationSites.names
+        : const <String>[];
+    _update(() {
+      _quickCategory = category;
+      _isSearching = false;
+      _destinationSuggestions = [
+        for (final place in places)
+          {...place.toFeatureMap(), 'quickDestination': place},
+        for (final name in listedEvacuationSites)
+          {
+            'text': name,
+            'category': 'Evacuation site',
+            'place_name': MarulasEvacuationSites.removedNames.contains(name)
+                ? 'Reported removed; directions unavailable'
+                : 'LGU-listed site; find its mapped location',
+            'icon': Icons.home_work_outlined,
+            'routingUnavailable': MarulasEvacuationSites.removedNames.contains(
+              name,
+            ),
+            'listedSite': name,
+          },
+      ];
+      _searchMessage = listedEvacuationSites.isNotEmpty
+          ? 'Choose a listed site to find its mapped location. Map pins do not confirm an entrance or that the site is open.'
+          : places.isEmpty
+          ? 'No confirmed catalog locations in this category for ${AppEnvironment.area.name}. Choose a known destination pin on the map; confirm emergency availability locally.'
+          : '$label: choose a listed place, then review its mapped location. Location and availability need local confirmation.';
+    });
+  }
+
+  Future<void> _confirmQuickDestination(MarulasLandmark place) async {
+    if (_confirmingQuickDestination) return;
+    _confirmingQuickDestination = true;
+    final request = ++_searchId;
+    final session = _routingService.planningSessionId;
+    try {
+      final Position? point;
+      if (widget.quickDestinationPicker != null) {
+        point = await widget.quickDestinationPicker!(context, place);
+      } else {
+        final result = await Navigator.of(context).push<Map<String, dynamic>>(
+          MaterialPageRoute(
+            builder: (_) => LocationPickerScreen(
+              forRouting: true,
+              initialPosition: Position(place.lng, place.lat),
+              placeName: place.name,
+              instructions:
+                  'Review the mapped location for ${place.name}. This is not a verified entrance. Check access and current availability locally.',
+            ),
+          ),
+        );
+        final lat = result?['lat'], lng = result?['lng'];
+        point = lat is num && lng is num ? Position(lng, lat) : null;
+      }
+      if (!mounted ||
+          request != _searchId ||
+          session != _routingService.planningSessionId ||
+          point == null)
+        return;
+      if (!RoutingService.validRoutePoint(point) ||
+          !GeoUtils.isInsideStudyArea(
+            point.lat.toDouble(),
+            point.lng.toDouble(),
+            bufferMeters: 80,
+          )) {
+        _update(
+          () => _searchMessage =
+              'The confirmed pin must be within the selected study area. Choose the entrance again.',
+        );
+        return;
+      }
+      _update(() {
+        _destinationController.text = place.name;
+        _destinationSuggestions = [];
+        _quickCategory = null;
+        _searchMessage = null;
+      });
+      _routingService.setDestination(
+        point,
+        place.name,
+        directionsFetcher: widget.directionsFetcher,
+      );
+    } catch (_) {
+      if (mounted && request == _searchId) {
+        _update(
+          () => _searchMessage =
+              'Could not confirm this destination. Please retry or choose a pin on the map.',
+        );
+      }
+    } finally {
+      _confirmingQuickDestination = false;
+    }
+  }
 
   Future<void> _fetchSuggestions(String query) async {
     if (!mounted) return;
+    final requestId = ++_searchId;
 
-    // 1. Check Local Custom Database FIRST (Instant & Free)
-    final lowerQuery = query.toLowerCase().replaceAll('valenzuela', '').trim();
-    final localMatches = _localLandmarks.where((landmark) {
-      final name = landmark['text'].toString().toLowerCase();
-      final place = landmark['place_name'].toString().toLowerCase();
-      return name.contains(lowerQuery) || place.contains(lowerQuery);
-    }).toList();
+    List<Map<String, dynamic>> combinedMatches = [];
 
-    if (localMatches.isNotEmpty) {
-      setState(() {
-        _destinationSuggestions = localMatches;
+    // Listed sites are resolved live rather than reusing uncorroborated legacy pins.
+    if (!AppEnvironment.isFieldTest) {
+      for (final name in MarulasEvacuationSites.names) {
+        if (matchesPlaceSearch(query, [
+          name,
+          'evacuation center',
+          'evac center',
+        ], ignoreAreaWords: true)) {
+          combinedMatches.add({
+            'text': name,
+            'category': 'Evacuation site',
+            'listedSite': name,
+            'place_name': 'LGU-listed site; find its mapped location',
+            'icon': Icons.home_work_outlined,
+          });
+        }
+      }
+    }
+
+    // 1. Search local Barangay Marulas Landmarks Catalog (First priority - high precision POIs)
+    final localLandmarks = AppEnvironment.area.searchLandmarks(query);
+    for (var landmark in localLandmarks) {
+      if (!GeoUtils.isInsideStudyArea(
+        landmark.lat,
+        landmark.lng,
+        bufferMeters: 80,
+      ))
+        continue;
+      if (!combinedMatches.any((m) => m['id'] == landmark.id)) {
+        combinedMatches.add({
+          ...landmark.toFeatureMap(),
+          'quickDestination': landmark,
+        });
+      }
+    }
+
+    // 2. Search Monitored Firestore Roads Network (Admin Imported Streets)
+    final appStateRoads = AppStateService.instance.roads;
+    for (var road in appStateRoads) {
+      if (road.name.isNotEmpty &&
+          matchesPlaceSearch(query, [road.name], ignoreAreaWords: true)) {
+        GeoCoord? center;
+        try {
+          center = GeoUtils.getRoadCenter(road.geometry);
+        } catch (_) {
+          continue;
+        }
+        if (center != null &&
+            GeoUtils.isInsideStudyArea(
+              center.lat,
+              center.lng,
+              bufferMeters: 80,
+            )) {
+          final roadName = road.name;
+          if (!combinedMatches.any((m) => m['roadId'] == road.id)) {
+            combinedMatches.add({
+              'roadId': road.id,
+              'text': roadName,
+              'place_name': '$roadName, ${AppEnvironment.area.name}',
+              'category': 'Monitored Street',
+              'center': [center.lng, center.lat],
+              'icon': Icons.add_road_rounded,
+            });
+          }
+        }
+      }
+    }
+
+    if (combinedMatches.isNotEmpty) {
+      _update(() {
+        _destinationSuggestions = combinedMatches.take(10).toList();
         _isSearching = false;
       });
-      return; // Stop here if we found a local landmark!
+      return;
     }
 
-    // 2. Fallback to OpenStreetMap (Nominatim) Free Public API
-    // This is 100% free, requires no API key, and provides great redundancy.
+    bool remoteUnavailable = false;
     try {
-      final nominatimUrl = Uri.parse(
-          'https://nominatim.openstreetmap.org/search'
-          '?q=${Uri.encodeComponent('$query Valenzuela')}'
-          '&format=json'
-          '&limit=5'
-          '&countrycodes=ph'
+      final places = await _lookupPlaces(query);
+      combinedMatches.addAll(
+        places.map(
+          (place) => {
+            ...place.toFeatureMap(),
+            'icon': Icons.location_on_outlined,
+          },
+        ),
       );
-      
-      final nomResponse = await http.get(nominatimUrl, headers: {
-        'User-Agent': 'SafePathsCapstoneApp/1.0', // Nominatim requires a User-Agent
-      });
-
-      if (nomResponse.statusCode == 200) {
-        final List<dynamic> data = json.decode(nomResponse.body);
-        if (data.isNotEmpty) {
-          final osmResults = data.map((item) {
-            final displayName = item['display_name'] as String;
-            final parts = displayName.split(',');
-            final text = parts.isNotEmpty ? parts.first.trim() : displayName;
-            
-            return {
-              'text': text,
-              'place_name': displayName,
-              'center': [
-                double.parse(item['lon'].toString()),
-                double.parse(item['lat'].toString()),
-              ],
-            };
-          }).toList();
-
-          setState(() {
-            _destinationSuggestions = osmResults;
-            _isSearching = false;
-          });
-          return; // Stop here if OSM found it!
-        }
-      }
-    } catch (e) {
-      debugPrint('OSM Fallback error: $e');
+    } catch (_) {
+      remoteUnavailable = true;
     }
 
-    // 3. Final Fallback to Mapbox API
-    if (_mapboxToken.isEmpty) return;
+    if (!mounted || requestId != _searchId) return;
+    // Public Nominatim does not permit client-side autocomplete. Local
+    // results and the configured provider are the search-as-you-type sources.
+    if (mounted && requestId == _searchId) {
+      _update(() {
+        _searchMessage = combinedMatches.isEmpty
+            ? remoteUnavailable
+                  ? 'Map search is unavailable. Try again or choose on the map.'
+                  : 'No matches found. Try another name or choose on the map.'
+            : null;
+        _destinationSuggestions = combinedMatches.take(10).toList();
+        _isSearching = false;
+      });
+    }
+  }
 
-    final searchQuery = '$query Valenzuela';
-    final url = Uri.parse(
-        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(searchQuery)}.json'
-        '?access_token=$_mapboxToken'
-        '&proximity=${_routingService.originPoint?.lng ?? 120.9842},${_routingService.originPoint?.lat ?? 14.6761}'
-        '&bbox=120.8500,14.5500,121.1500,14.8500' // Greater Northern Metro Manila BBox
-        '&country=ph' // Keep it within the Philippines
-        '&limit=5' // Fetch top 5 suggestions
-    );
+  Future<List<MapboxPlace>> _lookupPlaces(
+    String query, {
+    List<String> expectedNames = const [],
+  }) =>
+      widget.placeLookup?.call(query, expectedNames) ??
+      MapboxPlaceSearch.search(
+        query: query,
+        token: _mapboxToken,
+        area: AppEnvironment.area,
+        expectedNames: expectedNames,
+        isInScope: (lat, lng) =>
+            GeoUtils.isInsideStudyArea(lat, lng, bufferMeters: 80),
+      );
 
+  Future<void> _resolveListedSite(String name) async {
+    if (_resolvingSite != null ||
+        MarulasEvacuationSites.removedNames.contains(name))
+      return;
+    final request = ++_searchId, session = _routingService.planningSessionId;
+    _update(() {
+      _resolvingSite = name;
+      _isSearching = true;
+      _searchMessage = null;
+    });
     try {
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final features = data['features'] as List?;
-        if (mounted) {
-          setState(() {
-            _destinationSuggestions = features?.cast<Map<String, dynamic>>() ?? [];
-            _isSearching = false;
-          });
-        }
-      } else {
-        if (mounted) setState(() => _isSearching = false);
+      final places = await _lookupPlaces(
+        name,
+        expectedNames: MarulasEvacuationSites.searchNames(name),
+      );
+      if (!mounted ||
+          request != _searchId ||
+          session != _routingService.planningSessionId)
+        return;
+      _update(() {
+        _resolvingSite = null;
+        _isSearching = false;
+      });
+      if (places.isEmpty) {
+        _update(
+          () => _searchMessage =
+              'No matching mapped site was found. Try another name or choose a known location on the map.',
+        );
+        return;
       }
-    } catch (e) {
-      if (mounted) setState(() => _isSearching = false);
-      debugPrint('[RoutePlannerScreen] Geocoding error: $e');
+      MarulasLandmark mapped(MapboxPlace place) => MarulasLandmark(
+        id: place.id,
+        name: name,
+        category: 'LGU-listed evacuation site',
+        address: place.address,
+        lat: place.lat,
+        lng: place.lng,
+        tags: const [],
+      );
+      if (places.length == 1) {
+        await _confirmQuickDestination(mapped(places.single));
+      } else {
+        _update(() {
+          _destinationSuggestions = [
+            for (final place in places)
+              {
+                ...place.toFeatureMap(),
+                'quickDestination': mapped(place),
+                'icon': Icons.place_outlined,
+              },
+          ];
+          _searchMessage =
+              'Several mapped locations match. Choose one and review its position.';
+        });
+      }
+    } catch (_) {
+      if (mounted && request == _searchId) {
+        _update(
+          () => _searchMessage =
+              'Map search is unavailable. Try again or choose on the map.',
+        );
+      }
+    } finally {
+      if (mounted && request == _searchId)
+        _update(() {
+          _resolvingSite = null;
+          _isSearching = false;
+        });
     }
   }
 
   Future<void> _selectDestination(Map<String, dynamic> feature) async {
+    if (feature['routingUnavailable'] == true) return;
+    if (feature['listedSite'] is String) {
+      await _resolveListedSite(feature['listedSite'] as String);
+      return;
+    }
+    final quick = feature['quickDestination'];
+    if (quick is MarulasLandmark) {
+      await _confirmQuickDestination(quick);
+      return;
+    }
+    _debounce?.cancel();
+    _searchId++;
+    _isSearching = false;
+    _searchMessage = null;
     final placeName = feature['place_name'] as String?;
     final center = feature['center'] as List?;
-    
+
     if (placeName != null && center != null && center.length >= 2) {
       final lon = (center[0] as num).toDouble();
       final lat = (center[1] as num).toDouble();
-      
-      setState(() {
-        _destinationController.text = feature['text'] ?? placeName; // Set short name if available
+
+      if (!RoutingService.validRoutePoint(Position(lon, lat)) ||
+          !GeoUtils.isInsideStudyArea(lat, lon, bufferMeters: 80.0)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                tr(
+                  context,
+                  'Selected location is outside the selected study area scope.',
+                ),
+              ),
+              backgroundColor: AppPalette.of(context).error,
+            ),
+          );
+        }
+        return;
+      }
+
+      _update(() {
+        _destinationController.text =
+            feature['text'] ?? placeName; // Set short name if available
         _destinationSuggestions = []; // Hide suggestions
         FocusScope.of(context).unfocus(); // Close keyboard
       });
-      
-      _routingService.setDestination(Position(lon, lat), placeName);
+
+      _routingService.setDestination(
+        Position(lon, lat),
+        placeName,
+        directionsFetcher: widget.directionsFetcher,
+      );
+    }
+  }
+
+  Future<void> _pickLocationOnMap({bool forOrigin = false}) async {
+    _debounce?.cancel();
+    _searchId++;
+    _update(() {
+      _quickCategory = null;
+      _resolvingSite = null;
+      _isSearching = false;
+      _searchMessage = null;
+      _destinationSuggestions = [];
+    });
+    FocusScope.of(context).unfocus();
+    final initialPos =
+        (forOrigin
+            ? _routingService.originPoint
+            : _routingService.destinationPoint) ??
+        _routingService.originPoint ??
+        Position(AppEnvironment.area.longitude, AppEnvironment.area.latitude);
+
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          forRouting: true,
+          forOrigin: forOrigin,
+          initialPosition: initialPos,
+        ),
+      ),
+    );
+
+    if (result != null && mounted) {
+      final lat = (result['lat'] as num).toDouble();
+      final lng = (result['lng'] as num).toDouble();
+      final placeName =
+          (result['placeName'] as String?) ?? 'Pinned Destination';
+
+      if (!GeoUtils.isInsideStudyArea(lat, lng, bufferMeters: 80.0)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                'Pinned location is outside the selected study area scope. Please choose a location within the selected study area.',
+              ),
+            ),
+            backgroundColor: AppPalette.of(context).error,
+          ),
+        );
+        return;
+      }
+
+      _update(() {
+        if (!forOrigin) _destinationController.text = placeName;
+        _destinationSuggestions = [];
+      });
+
+      if (forOrigin) {
+        _routingService.setOrigin(Position(lng, lat), placeName);
+      } else {
+        _routingService.setDestination(Position(lng, lat), placeName);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final hasTrip = _routingService.destinationPoint != null;
+    final routes = _routingService.routes;
+    final error = _routingService.routeErrorMessage;
     return Stack(
       children: [
         Scaffold(
-          backgroundColor: AppColors.surface,
-          extendBodyBehindAppBar: true,
+          backgroundColor: p.surface,
           appBar: const AppTopBar(
+            inset: true,
             showBackButton: false,
             showProfile: true,
             showSettingsAction: true,
           ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.only(
-          top: MediaQuery.of(context).padding.top + 64 + 16,
-          left: 16,
-          right: 16,
-          bottom: 120, // Extra padding for BottomNavBar
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildSearchSection(),
-            const SizedBox(height: 24),
-            _buildVehicleSelector(),
-            const SizedBox(height: 24),
-            _buildSuggestedRoutesHeader(),
-            const SizedBox(height: 16),
-            // Blocking error: only when NO routes exist at all
-            if (_routingService.routeErrorMessage != null && _routingService.routes.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: AppColors.errorContainer,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: AppColors.error.withValues(alpha: 0.3),
-                    width: 2,
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.error.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.block, color: AppColors.error, size: 36),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (!hasTrip) ...[
+                  Text(
+                    tr(context, 'Where are you going?'),
+                    style: GoogleFonts.manrope(
+                      fontSize: 23,
+                      fontWeight: FontWeight.w800,
+                      color: p.onSurface,
                     ),
-                    const SizedBox(height: 16),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildSearchSection(),
+                  const SizedBox(height: 20),
+                  _buildQuickDestinations(),
+                  if (_searchMessage != null ||
+                      _destinationSuggestions.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _buildSearchResults(),
+                  ],
+                  const SizedBox(height: 20),
+                  Text(
+                    tr(context, 'How are you traveling?'),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: p.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _buildVehicleSelector(),
+                  const SizedBox(height: 8),
+                  Text(
+                    tr(context, 'Travel mode helps assess route suitability.'),
+                    style: TextStyle(fontSize: 12, color: p.onSurfaceVariant),
+                  ),
+                ] else ...[
+                  _buildTripSummary(),
+                  const SizedBox(height: 20),
+                ],
+                if (error != null && routes.isEmpty)
+                  _buildPlanningError(error)
+                else if (routes.isNotEmpty) ...[
+                  _buildSuggestedRoutesHeader(),
+                  const SizedBox(height: 12),
+                  if (error != null) _notice(error, danger: true),
+                  if (_routingService.routeWarningMessage != null)
+                    _notice(_routingService.routeWarningMessage!),
+                  _buildSafestRouteCard(
+                    routes[_routingService.selectedRouteIndex],
+                  ),
+                  if (routes.length > 1) ...[
+                    const SizedBox(height: 18),
                     Text(
-                      'Destination Unreachable',
-                      style: GoogleFonts.manrope(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.onErrorContainer,
+                      tr(context, 'Other routes'),
+                      style: TextStyle(
+                        color: p.onSurfaceVariant,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
-                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      _routingService.routeErrorMessage!,
-                      style: GoogleFonts.inter(
-                        fontSize: 15,
-                        color: AppColors.onErrorContainer,
-                        height: 1.5,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                    for (final entry in routes.asMap().entries)
+                      if (entry.key != _routingService.selectedRouteIndex)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _buildAlternativeRouteCard(
+                            entry.value,
+                            entry.key,
+                          ),
+                        ),
                   ],
-                ),
-              )
-            else if (_routingService.routes.isNotEmpty) ...[
-              // Non-blocking weather warning banner (shows ABOVE routes)
-              if (_routingService.routeWarningMessage != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3E0),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: const Color(0xFFE65100).withValues(alpha: 0.3),
-                        width: 1.5,
-                      ),
-                    ),
-                    child: Row(
+                ],
+              ],
+            ),
+          ),
+        ),
+        if (_routingService.isRouteLoading)
+          Positioned.fill(
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: .45),
+              child: Center(
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.warning_amber_rounded, color: Color(0xFFE65100), size: 24),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            _routingService.routeWarningMessage!,
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: const Color(0xFFBF360C),
-                              height: 1.4,
-                            ),
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text(
+                          tr(context, 'Checking available routes...'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: p.onSurface,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
                     ),
                   ),
                 ),
-              _buildSafestRouteCard(_routingService.routes[_routingService.selectedRouteIndex]),
-              const SizedBox(height: 16),
-              ..._routingService.routes.asMap().entries.where((e) => e.key != _routingService.selectedRouteIndex).map((entry) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _buildAlternativeRouteCard(entry.value, entry.key),
-                );
-              }),
-            ] else ...[
-              const SizedBox(height: 32),
-              Center(
-                child: Text(
-                  'Enter a destination to see routes.',
-                  style: GoogleFonts.inter(color: AppColors.outline),
-                ),
               ),
-            ],
-            const SizedBox(height: 32),
-          ],
-        ),
-      ),
-    ),
-    if (_routingService.isRouteLoading)
-      Container(
-        color: Colors.black.withValues(alpha: 0.6),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(color: AppColors.primary),
-              const SizedBox(height: 16),
-              Text(
-                'Calculating safest route...',
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                  decoration: TextDecoration.none,
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+      ],
+    );
+  }
+
+  String get _originLabel => _routingService.originName.isNotEmpty
+      ? _routingService.originName
+      : _routingService.isLocatingGps
+      ? 'Locating...'
+      : _routingService.isUsingGpsFallback
+      ? 'Choose a start point'
+      : 'Current Location';
+
+  Widget _panel(Widget child) {
+    final p = AppPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: p.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: p.outlineVariant.withValues(alpha: .5)),
       ),
-    ],
+      child: child,
     );
   }
 
   Widget _buildSearchSection() {
+    final p = AppPalette.of(context);
+    return _panel(
+      Column(
+        children: [
+          _tripField(
+            tr(context, 'FROM'),
+            p.primary,
+            TextField(
+              key: const ValueKey('planner-origin-field'),
+              readOnly: true,
+              controller: _originController..text = _originLabel,
+              onTap: () => _pickLocationOnMap(forOrigin: true),
+              decoration: InputDecoration(
+                hintText: tr(context, 'Choose starting point'),
+                suffixIcon: IconButton(
+                  tooltip: tr(context, 'Use current GPS location'),
+                  onPressed: () => _beginPlanning(
+                    prefillDestination: _routingService.destinationPoint,
+                    name: _routingService.destinationName,
+                  ),
+                  icon: Icon(Icons.my_location, color: p.primary),
+                ),
+              ),
+              style: TextStyle(fontSize: 14, color: p.onSurface),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _tripField(
+            tr(context, 'TO'),
+            p.notPassable,
+            TextField(
+              key: const ValueKey('planner-destination-field'),
+              readOnly: true,
+              controller: _destinationController,
+              onTap: _openDestinationSearch,
+              decoration: InputDecoration(
+                hintText: tr(context, 'Search a street or landmark'),
+                suffixIcon: IconButton(
+                  tooltip: tr(context, 'Choose on map'),
+                  onPressed: () => _pickLocationOnMap(),
+                  icon: Icon(Icons.place_outlined, color: p.primary),
+                ),
+              ),
+              style: TextStyle(fontSize: 14, color: p.onSurface),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripField(String label, Color color, Widget field) => Row(
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      Container(
+        width: 8,
+        height: 8,
+        margin: const EdgeInsets.only(right: 10),
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                color: AppPalette.of(context).onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            field,
+          ],
+        ),
+      ),
+    ],
+  );
+
+  Widget _buildTripSummary() {
+    final p = AppPalette.of(context);
+    return _panel(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () => _pickLocationOnMap(forOrigin: true),
+                  child: Row(
+                    children: [
+                      Icon(Icons.trip_origin, size: 14, color: p.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _originLabel,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, color: p.onSurface),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: tr(context, 'Use current GPS location'),
+                onPressed: () => _beginPlanning(
+                  prefillDestination: _routingService.destinationPoint,
+                  name: _routingService.destinationName,
+                ),
+                icon: Icon(Icons.my_location, size: 20, color: p.primary),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Icon(Icons.place, size: 14, color: p.notPassable),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _routingService.destinationName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: p.onSurface,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: _openDestinationSearch,
+                child: Text(tr(context, 'Change')),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildVehicleSelector(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVehicleSelector() => PlannerTravelSelector(
+    selected: _routingService.selectedVehicleType,
+    onSelected: _routingService.setVehicleType,
+  );
+
+  Widget _buildQuickDestinations() {
+    final p = AppPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.03),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Positioned(
-                left: 21,
-                top: 40,
-                bottom: 40,
-                child: Container(
-                  width: 2,
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceVariant,
-                    borderRadius: BorderRadius.circular(1),
-                  ),
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        margin: const EdgeInsets.only(left: 16, right: 16),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 4),
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'FROM',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.outline,
-                                letterSpacing: 1.0,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              decoration: BoxDecoration(
-                                color: AppColors.surfaceContainerHigh,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      RoutingService.devMode
-                                          ? 'Brgy. Marulas (Dev Mode)'
-                                          : _routingService.originPoint != null
-                                              ? 'Current Location'
-                                              : 'Locating...',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w500,
-                                        color: RoutingService.devMode
-                                            ? AppColors.tertiary
-                                            : _routingService.originPoint != null
-                                                ? AppColors.onSurface
-                                                : AppColors.outline,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Icon(
-                                    _routingService.originPoint != null
-                                        ? Icons.my_location
-                                        : Icons.location_searching,
-                                    color: AppColors.primary,
-                                    size: 20,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        margin: const EdgeInsets.only(left: 16, right: 16),
-                        decoration: BoxDecoration(
-                          color: AppColors.tertiary,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: AppColors.tertiary.withValues(alpha: 0.2), width: 4),
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'TO',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.outline,
-                                letterSpacing: 1.0,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                              decoration: BoxDecoration(
-                                color: AppColors.surfaceContainerHigh,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: TextField(
-                                controller: _destinationController,
-                                style: GoogleFonts.inter(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.onSurface,
-                                ),
-                                onChanged: _onSearchChanged,
-                                onSubmitted: (value) {
-                                  if (_destinationSuggestions.isNotEmpty) {
-                                    _selectDestination(_destinationSuggestions.first);
-                                  } else if (value.trim().isNotEmpty) {
-                                    _onSearchChanged(value);
-                                  }
-                                },
-                                decoration: InputDecoration(
-                                  hintText: 'Enter destination...',
-                                  hintStyle: GoogleFonts.inter(color: AppColors.outline),
-                                  border: InputBorder.none,
-                                  filled: false,
-                                  suffixIcon: _isSearching
-                                      ? const Padding(
-                                          padding: EdgeInsets.all(12.0),
-                                          child: SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
-                                          ),
-                                        )
-                                      : _destinationController.text.isNotEmpty
-                                          ? IconButton(
-                                              icon: const Icon(Icons.clear, size: 20),
-                                              onPressed: () {
-                                                _destinationController.clear();
-                                                _onSearchChanged('');
-                                              },
-                                            )
-                                          : null,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        
-        // Autocomplete Suggestions List
-        if (_destinationSuggestions.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              padding: EdgeInsets.zero,
-              itemCount: _destinationSuggestions.length,
-              separatorBuilder: (context, index) => const Divider(height: 1, indent: 48),
-              itemBuilder: (context, index) {
-                final feature = _destinationSuggestions[index];
-                final text = feature['text'] ?? '';
-                final placeName = feature['place_name'] ?? '';
-                final subText = placeName.replaceFirst('$text, ', '');
-                
-                return ListTile(
-                  leading: const Icon(Icons.location_on_outlined, color: AppColors.outline),
-                  title: Text(
-                    text,
-                    style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14),
-                  ),
-                  subtitle: subText.isNotEmpty
-                      ? Text(
-                          subText,
-                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.outline),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      : null,
-                  onTap: () => _selectDestination(feature),
-                );
-              },
-            ),
-          ),
-        
-        const SizedBox(height: 24),
         Text(
-          'Quick Destinations',
-          style: GoogleFonts.manrope(
+          tr(context, 'Quick Destinations'),
+          style: TextStyle(
             fontSize: 16,
-            fontWeight: FontWeight.w800,
-            color: AppColors.onSurface,
+            fontWeight: FontWeight.w700,
+            color: p.onSurface,
           ),
         ),
-        const SizedBox(height: 12),
-        // Emergency Landmarks Chips
-        Column(
+        const SizedBox(height: 10),
+        Row(
           children: [
-            Row(
-              children: [
-                _buildLandmarkChip('Hospitals', Icons.local_hospital, 'Hospital Medical Center Valenzuela'),
-                const SizedBox(width: 12),
-                _buildLandmarkChip('Evac Centers', Icons.school, 'Elementary School Barangay Hall Valenzuela'),
-              ],
+            _quickTile(
+              'Hospitals',
+              Icons.local_hospital_outlined,
+              QuickDestinationCategory.hospitals,
+              p.error,
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _buildLandmarkChip('Police', Icons.local_police, 'Police Station Valenzuela'),
-                const SizedBox(width: 12),
-                _buildLandmarkChip('Fire Station', Icons.local_fire_department, 'Fire Station Valenzuela'),
-              ],
+            const SizedBox(width: 10),
+            _quickTile(
+              'Evac Centers',
+              Icons.home_outlined,
+              QuickDestinationCategory.evacuationCenters,
+              p.passable,
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            _quickTile(
+              'Barangay Hall',
+              Icons.account_balance_outlined,
+              QuickDestinationCategory.barangayHall,
+              p.primary,
+            ),
+            const SizedBox(width: 10),
+            _quickTile(
+              'Emergency/Police',
+              Icons.shield_outlined,
+              QuickDestinationCategory.emergencyServices,
+              p.onSurfaceVariant,
             ),
           ],
         ),
@@ -668,755 +996,454 @@ class _RoutePlannerScreenState extends State<RoutePlannerScreen> {
     );
   }
 
-  Widget _buildLandmarkChip(String label, IconData icon, String query) {
+  Widget _quickTile(
+    String label,
+    IconData icon,
+    QuickDestinationCategory category,
+    Color color,
+  ) {
+    final p = AppPalette.of(context);
     return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          _destinationController.text = label;
-          _onSearchChanged(query);
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.5),
-              width: 1,
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 20, color: AppColors.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  label,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.onSurfaceVariant,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
+      child: Material(
+        color: p.surfaceContainerLowest,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: p.outlineVariant.withValues(alpha: .5)),
         ),
-      ),
-    );
-  }
-
-  Widget _buildVehicleSelector() {
-    final vehicles = [
-      {'label': 'Walking', 'icon': Icons.directions_walk},
-      {'label': 'Motorcycle', 'icon': Icons.motorcycle},
-      {'label': 'Sedan', 'icon': Icons.directions_car},
-      {'label': 'SUV / Pickup', 'icon': Icons.airport_shuttle},
-      {'label': 'Truck', 'icon': Icons.local_shipping},
-    ];
-
-    Widget buildVehicleCard(Map<String, dynamic> v) {
-      final isSelected = _routingService.selectedVehicleType == v['label'];
-      return Expanded(
-        child: GestureDetector(
-          onTap: () => _routingService.setVehicleType(v['label'] as String),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-            decoration: BoxDecoration(
-              color: isSelected ? AppColors.primaryContainer : AppColors.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isSelected ? AppColors.primary : AppColors.outlineVariant.withValues(alpha: 0.5),
-                width: isSelected ? 2 : 1,
-              ),
-              boxShadow: isSelected
-                  ? [
-                      BoxShadow(
-                        color: AppColors.primary.withValues(alpha: 0.2),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
-                      )
-                    ]
-                  : null,
-            ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => _showQuickDestinations(category, tr(context, label)),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  v['icon'] as IconData,
-                  size: 20,
-                  color: isSelected ? AppColors.onPrimaryContainer : AppColors.onSurfaceVariant,
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, size: 18, color: color),
                 ),
                 const SizedBox(width: 8),
-                Flexible(
+                Expanded(
                   child: Text(
-                    v['label'] as String,
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                      color: isSelected ? AppColors.onPrimaryContainer : AppColors.onSurfaceVariant,
+                    tr(context, label),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: p.onSurface,
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
           ),
         ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Travel Mode',
-          style: GoogleFonts.manrope(
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            color: AppColors.onSurface,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            buildVehicleCard(vehicles[0]),
-            const SizedBox(width: 12),
-            buildVehicleCard(vehicles[1]),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            buildVehicleCard(vehicles[2]),
-            const SizedBox(width: 12),
-            buildVehicleCard(vehicles[3]),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            buildVehicleCard(vehicles[4]),
-            const SizedBox(width: 12),
-            const Expanded(child: SizedBox.shrink()), // Empty spacer to keep truck half-width
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSuggestedRoutesHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(
-          'Suggested Routes',
-          style: GoogleFonts.manrope(
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-            color: AppColors.onSurface,
-          ),
-        ),
-        Text(
-          'LIVE UPDATES ACTIVE',
-          style: GoogleFonts.inter(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: AppColors.primary,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSafestRouteCard(PlannedRoute route) {
-    bool isSafe = route.safetyStatus == 'safe';
-    bool isPassablePartial = route.safetyStatus == 'passable_partial';
-    bool isUnverified = route.safetyStatus == 'unverified_risk';
-    bool isPartial = route.safetyStatus == 'partial';
-    // flooded or any other status is treated as danger
-    
-    Color tagBg = isSafe
-        ? AppColors.secondaryContainer
-        : isUnverified
-            ? AppColors.onSurfaceVariant.withValues(alpha: 0.10)
-            : isPassablePartial 
-                ? AppColors.partial.withValues(alpha: 0.10)
-                : isPartial
-                    ? AppColors.partial.withValues(alpha: 0.15)
-                    : AppColors.errorContainer;
-    Color tagText = isSafe
-        ? AppColors.onSecondaryContainer
-        : isUnverified
-            ? AppColors.onSurfaceVariant
-            : isPassablePartial
-                ? AppColors.onSurfaceVariant
-                : isPartial
-                    ? AppColors.partial
-                    : AppColors.onErrorContainer;
-    IconData tagIcon = isSafe
-        ? Icons.verified_user
-        : isUnverified
-            ? Icons.help_outline
-            : isPassablePartial
-                ? Icons.water
-                : isPartial
-                    ? Icons.info_outline
-                    : Icons.warning;
-    String tagLabel = isSafe
-        ? 'SAFEST ROUTE'
-        : isUnverified
-            ? 'UNVERIFIED ROUTE'
-            : isPassablePartial
-                ? 'PARTIAL FLOOD (PASSABLE)'
-                : isPartial
-                    ? 'CAUTION: PARTIAL FLOOD'
-                    : 'WARNING: FLOODED';
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: isSafe
-              ? AppColors.secondary.withValues(alpha: 0.1)
-              : isPassablePartial
-                  ? AppColors.partial.withValues(alpha: 0.2)
-                  : isPartial
-                      ? AppColors.partial.withValues(alpha: 0.3)
-                      : AppColors.error.withValues(alpha: 0.2),
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: tagBg,
-                                  borderRadius: BorderRadius.circular(100),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(tagIcon, size: 14, color: tagText),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      tagLabel,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.5,
-                                        color: tagText,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(100),
-                                ),
-                                child: Text(
-                                  'Safety Score: ${route.safetyScore}/100',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 0.5,
-                                    color: AppColors.primary,
-                                  ),
-                                ),
-                              ),
-                              if (route.riskReductionPercentage != null && route.riskReductionPercentage! > 0)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.secondary.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(100),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(Icons.trending_down, size: 14, color: AppColors.secondary),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        route.timePenaltyMin != null && route.timePenaltyMin! > 0
-                                            ? 'Risk Reduced by ${route.riskReductionPercentage}% (+${route.timePenaltyMin} mins)'
-                                            : 'Risk Reduced by ${route.riskReductionPercentage}%',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 0.5,
-                                          color: AppColors.secondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            route.summary,
-                            style: GoogleFonts.manrope(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.onSurface,
-                              height: 1.2,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          '${route.durationMin} min',
-                          style: GoogleFonts.manrope(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.onSurface,
-                            letterSpacing: -1,
-                          ),
-                        ),
-                        Text(
-                          '${route.distanceMiles} miles',
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.outline,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isSafe 
-                        ? AppColors.secondary.withValues(alpha: 0.05) 
-                        : isPassablePartial
-                            ? AppColors.partial.withValues(alpha: 0.05)
-                            : AppColors.error.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Icon(
-                          isSafe ? Icons.check_circle : (isPassablePartial ? Icons.info_outline : Icons.error_outline), 
-                          color: isSafe ? AppColors.secondary : (isPassablePartial ? AppColors.onSurfaceVariant : AppColors.error), 
-                          size: 20
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              isSafe
-                                  ? 'Recommended route. Clear of known flood zones.'
-                                  : isPassablePartial
-                                      ? 'Recommended route. Passes through shallow water safe for your vehicle.'
-                                      : 'Recommended route. Balances travel time and risk exposure.',
-                              style: GoogleFonts.inter(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: isSafe 
-                                    ? AppColors.onSecondaryContainer 
-                                    : isPassablePartial 
-                                        ? AppColors.onSurfaceVariant 
-                                        : AppColors.onErrorContainer,
-                              ),
-                            ),
-                            if (route.routeExplanations.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              ...route.routeExplanations.map((explanation) => Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Icon(
-                                      explanation.startsWith('Avoids') ? Icons.check : Icons.warning_amber_rounded, 
-                                      size: 14, 
-                                      color: explanation.startsWith('Avoids') ? AppColors.secondary : AppColors.error
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        explanation,
-                                        style: GoogleFonts.inter(
-                                          fontSize: 13,
-                                          color: AppColors.onSurfaceVariant,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              )),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // Mini Map Preview
-                GestureDetector(
-                  onTap: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePreviewScreen(route: route)));
-                  },
-                  child: Container(
-                    height: 192,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: AppColors.surfaceContainerHigh,
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: AppMap(
-                          routePoints: route.points,
-                          // Ignore gestures to keep it as a static preview in the scrollable list
-                        ),
-                      ),
-                      // Gradient overlay
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        height: 80,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
-                              colors: [
-                                Colors.black.withValues(alpha: 0.4),
-                                Colors.transparent,
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 12,
-                        left: 12,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.9),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            'TAP TO EXPAND',
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.5,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 12,
-                        right: 12,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.9),
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.1),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              )
-                            ]
-                          ),
-                          child: const Icon(Icons.fullscreen, color: AppColors.primary, size: 24),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                ),
-                const SizedBox(height: 20),
-                // Start Navigation Button
-                if (route.safetyStatus == 'flooded')
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    decoration: BoxDecoration(
-                      color: AppColors.errorContainer,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.block, color: AppColors.error, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Route Blocked',
-                          style: GoogleFonts.inter(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                            color: AppColors.error,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.primaryContainer],
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => NavigationScreen(route: route)));
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.transparent,
-                        shadowColor: Colors.transparent,
-                        padding: const EdgeInsets.symmetric(vertical: 18),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            'Start Navigation',
-                            style: GoogleFonts.inter(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.5,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.navigation, color: Colors.white, size: 20),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
 
-  Widget _buildAlternativeRouteCard(PlannedRoute route, int index) {
-    int risks = route.avoidedRoads.length;
-    bool isSafe = route.safetyStatus == 'safe';
-    bool isPassablePartial = route.safetyStatus == 'passable_partial';
-    bool isPartial = route.safetyStatus == 'partial';
-
-    Color statusColor = isSafe
-        ? AppColors.secondary
-        : isPassablePartial
-            ? AppColors.outline
-            : isPartial
-                ? AppColors.partial
-                : AppColors.error;
-
-    return GestureDetector(
-      onTap: () => _routingService.selectRoute(index),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: statusColor.withValues(alpha: 0.25),
-            width: 1.5,
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+  Widget _buildDestinationSearch(BuildContext context) {
+    final p = AppPalette.of(context);
+    return Scaffold(
+      backgroundColor: p.surface,
+      body: SafeArea(
+        child: Column(
           children: [
-            // Safety dot indicator
-            Container(
-              width: 10,
-              height: 10,
-              margin: const EdgeInsets.only(right: 14),
-              decoration: BoxDecoration(
-                color: statusColor,
-                shape: BoxShape.circle,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 16, 12),
+              child: Row(
+                children: [
+                  IconButton(
+                    tooltip: tr(context, 'Back'),
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '${tr(context, 'FROM')}: $_originLabel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: p.onSurfaceVariant,
+                            fontSize: 11,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        TextField(
+                          key: const ValueKey('planner-destination-search'),
+                          focusNode: _searchFocus,
+                          autofocus: true,
+                          controller: _lookupController,
+                          onChanged: _onSearchChanged,
+                          textInputAction: TextInputAction.search,
+                          onSubmitted: (value) {
+                            if (_quickCategory != null)
+                              FocusScope.of(context).unfocus();
+                            else if (_destinationSuggestions.length == 1)
+                              _chooseSearchResult(
+                                _destinationSuggestions.single,
+                              );
+                            else if (_destinationSuggestions.isNotEmpty)
+                              FocusScope.of(context).unfocus();
+                            else if (value.trim().isNotEmpty)
+                              _onSearchChanged(value);
+                          },
+                          decoration: InputDecoration(
+                            hintText: tr(
+                              context,
+                              'Search a street or landmark',
+                            ),
+                            suffixIcon: _isSearching
+                                ? const Padding(
+                                    padding: EdgeInsets.all(14),
+                                    child: SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                  )
+                                : IconButton(
+                                    tooltip: tr(context, 'Clear search'),
+                                    onPressed: () {
+                                      _lookupController.clear();
+                                      _onSearchChanged('');
+                                    },
+                                    icon: const Icon(Icons.close),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        route.summary,
-                        style: GoogleFonts.manrope(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.onSurface,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          'Score: ${route.safetyScore}',
-                          style: GoogleFonts.inter(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ),
-                      if (risks > 0) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: statusColor.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            '$risks RISK${risks > 1 ? 'S' : ''}',
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: statusColor,
-                            ),
-                          ),
-                        ),
-                      ]
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    isSafe
-                        ? 'Not recommended because:'
-                        : 'Not recommended because:',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.outline,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  if (route.routeExplanations.isNotEmpty)
-                    ...route.routeExplanations.map((explanation) => Padding(
-                      padding: const EdgeInsets.only(bottom: 2),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('• ', style: TextStyle(color: AppColors.outline, fontWeight: FontWeight.bold)),
-                          Expanded(
-                            child: Text(
-                              explanation,
-                              style: GoogleFonts.inter(
-                                fontSize: 12,
-                                color: AppColors.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ))
-                  else
-                    Text(
-                      'Longer travel time than the safest route.',
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: AppColors.onSurfaceVariant,
-                      ),
-                    ),
-                ],
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_destinationSuggestions.isEmpty &&
+                        _lookupController.text.trim().isEmpty &&
+                        _quickCategory == null)
+                      _buildQuickDestinations(),
+                    _buildSearchResults(),
+                  ],
+                ),
               ),
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  '${route.durationMin} min',
-                  style: GoogleFonts.manrope(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.onSurface,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final previous = _routingService.destinationPoint;
+                    await _pickLocationOnMap();
+                    if (mounted) _closeDestinationSearchIfChosen(previous);
+                  },
+                  icon: const Icon(Icons.place_outlined),
+                  label: Text(tr(context, 'Choose on the map instead')),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(48, 48),
+                    padding: const EdgeInsets.all(14),
                   ),
                 ),
-                Text(
-                  '${route.distanceMiles} mi',
-                  style: GoogleFonts.inter(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                    color: AppColors.outlineVariant,
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right, color: AppColors.outline, size: 20),
           ],
         ),
       ),
     );
   }
 
+  Widget _buildSearchResults() {
+    final p = AppPalette.of(context);
+    String group(Map<String, dynamic> item) =>
+        item['category'] == 'Monitored Street'
+        ? 'Roads we monitor'
+        : item['category'] == 'Evacuation site' ||
+              item['quickDestination'] is MarulasLandmark ||
+              AppEnvironment.area.landmarks.any(
+                (place) => place.id == item['id'],
+              )
+        ? 'Landmarks'
+        : 'Other places';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_searchMessage != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Text(
+              tr(context, _searchMessage!),
+              style: TextStyle(
+                color: p.onSurfaceVariant,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ),
+        for (final heading in ['Roads we monitor', 'Landmarks', 'Other places'])
+          if (_destinationSuggestions.any(
+            (item) => group(item) == heading,
+          )) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 8),
+              child: Text(
+                tr(context, heading),
+                style: TextStyle(
+                  color: p.onSurfaceVariant,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            for (final item in _destinationSuggestions.where(
+              (item) => group(item) == heading,
+            ))
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 4,
+                ),
+                leading: Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: p.primary.withValues(alpha: .08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    item['icon'] as IconData? ?? Icons.place_outlined,
+                    color: p.primary,
+                    size: 20,
+                  ),
+                ),
+                trailing: _resolvingSite == item['text']
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : null,
+                title: Text(
+                  item['text']?.toString() ?? '',
+                  style: TextStyle(
+                    color: p.onSurface,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: Text(
+                  (item['routingUnavailable'] == true
+                          ? tr(
+                              context,
+                              'Reported removed; directions unavailable',
+                            )
+                          : tr(context, item['place_name']?.toString() ?? ''))
+                      .replaceFirst('${item['text']}, ', ''),
+                  style: TextStyle(color: p.onSurfaceVariant, fontSize: 12),
+                ),
+                onTap:
+                    _confirmingQuickDestination ||
+                        _resolvingSite != null ||
+                        item['routingUnavailable'] == true
+                    ? null
+                    : () => _chooseSearchResult(item),
+              ),
+          ],
+      ],
+    );
+  }
 
+  Widget _buildSuggestedRoutesHeader() => Row(
+    children: [
+      Expanded(
+        child: Text(
+          tr(context, 'Suggested Routes'),
+          style: TextStyle(
+            fontSize: 19,
+            fontWeight: FontWeight.w800,
+            color: AppPalette.of(context).onSurface,
+          ),
+        ),
+      ),
+      Text(
+        '${_routingService.routes.length} ${tr(context, _routingService.routes.length == 1 ? 'option' : 'options')}',
+        style: TextStyle(
+          color: AppPalette.of(context).onSurfaceVariant,
+          fontSize: 12,
+        ),
+      ),
+    ],
+  );
+
+  Widget _notice(String message, {bool danger = false}) {
+    final p = AppPalette.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: danger ? p.errorContainer : p.warningContainer,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        tr(context, message),
+        style: TextStyle(
+          color: danger ? p.onErrorContainer : p.onWarningContainer,
+          fontSize: 13,
+          height: 1.4,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlanningError(String error) {
+    final p = AppPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: _panel(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Icon(Icons.route_outlined, color: p.warning, size: 34),
+            const SizedBox(height: 12),
+            Text(
+              tr(context, 'Unable to plan this trip'),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.w700,
+                color: p.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              tr(context, error),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: p.onSurfaceVariant, height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _routingService.originPoint == null
+                  ? () => _pickLocationOnMap(forOrigin: true)
+                  : () => _routingService.calculateRoute(
+                      directionsFetcher: widget.directionsFetcher,
+                    ),
+              child: Text(
+                tr(
+                  context,
+                  _routingService.originPoint == null
+                      ? 'Choose starting point'
+                      : 'Try again',
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: _openDestinationSearch,
+              child: Text(tr(context, 'Choose another place')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PlannedRoute _displayRoute(PlannedRoute route) {
+    final unavailable =
+        AppStateService.instance.requiresLiveDataWarning ||
+        SimulatedWeatherService.instance.isDataStale;
+    return unavailable && !route.needsCaution
+        ? route.copyWith(safetyStatus: 'unverified_risk')
+        : route;
+  }
+
+  Widget _buildSafestRouteCard(PlannedRoute route) {
+    final records = <RoadStatus>[];
+    for (final road in AppStateService.instance.roads) {
+      try {
+        if (RoutingService.doesRouteCrossGeometry(
+          route.points,
+          road.geometry,
+        )) {
+          records.add(road);
+        }
+      } catch (_) {
+        /* A malformed record cannot invent a check time. */
+      }
+    }
+    return PlannerRouteCard(
+      key: ValueKey('planner-selected-${identityHashCode(route.points)}'),
+      route: _displayRoute(route),
+      roadRecords: records,
+      map:
+          widget.routeMapBuilder?.call(route.points) ??
+          AppMap(
+            showSearchButton: false,
+            routePoints: route.points,
+            onMapCreatedCallback: (map) => _frameRouteCard(map, route),
+          ),
+      onPreview: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => RoutePreviewScreen(
+            route: route,
+            routeMapBuilder: widget.routeMapBuilder,
+          ),
+        ),
+      ),
+      onNavigate: () => _navigate(route),
+    );
+  }
+
+  Future<void> _frameRouteCard(MapboxMap map, PlannedRoute route) async {
+    _previewMap = map;
+    if (route.points.length < 2) return;
+    try {
+      // A static overview needs the route in view, rather than the area's
+      // default camera. Full-screen maps keep their own controls and scale.
+      await map.compass.updateSettings(CompassSettings(enabled: false));
+      await map.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
+      final camera = await map
+          .cameraForCoordinatesPadding(
+            route.points.map((p) => Point(coordinates: p)).toList(),
+            CameraOptions(
+              pitch: 0,
+              bearing: 0,
+              padding: MbxEdgeInsets(top: 22, left: 24, bottom: 30, right: 24),
+            ),
+            null,
+            17.5,
+            null,
+          )
+          .timeout(const Duration(seconds: 3));
+      if (!mounted ||
+          !identical(_previewMap, map) ||
+          _routingService.routes.isEmpty ||
+          !identical(
+            _routingService.routes[_routingService.selectedRouteIndex].points,
+            route.points,
+          )) {
+        return;
+      }
+      await map.setCamera(camera).timeout(const Duration(seconds: 3));
+    } catch (_) {
+      /* Full-screen route review remains available. */
+    }
+  }
+
+  Widget _buildAlternativeRouteCard(PlannedRoute route, int index) =>
+      PlannerRouteCard(
+        route: _displayRoute(route),
+        compact: true,
+        onSelect: () => _routingService.selectRoute(index),
+      );
 }

@@ -1,0 +1,7 @@
+{
+  "APP_ENV": "production",
+  "SAFEPATHS_BACKEND_ENABLED": true,
+  "SAFEPATHS_FIREBASE_PROJECT_ID": "safepaths-92c3d",
+  "SAFEPATHS_BACKEND_URL": "https://bbteuzgfgnrjjrqewidc.supabase.co/functions/v1/safepaths-main",
+  "SAFEPATHS_FOLLOWUPS_ENABLED": true
+}

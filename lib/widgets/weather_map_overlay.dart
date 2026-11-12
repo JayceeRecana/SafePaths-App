@@ -1,3 +1,4 @@
+import '../config/app_environment.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/weather_service.dart';
@@ -43,10 +44,13 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
     _current = SimulatedWeatherService.instance.currentState;
 
-    _rainController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 16), // ~60 fps tick
-    )..addListener(_tickRain)..repeat();
+    _rainController =
+        AnimationController(
+            vsync: this,
+            duration: const Duration(milliseconds: 16), // ~60 fps tick
+          )
+          ..addListener(_tickRain)
+          ..repeat();
 
     _pulseController = AnimationController(
       vsync: this,
@@ -64,7 +68,9 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
   @override
   void dispose() {
-    SimulatedWeatherService.instance.listenable.removeListener(_onWeatherChanged);
+    SimulatedWeatherService.instance.listenable.removeListener(
+      _onWeatherChanged,
+    );
     _rainController.dispose();
     _pulseController.dispose();
     _tintController.dispose();
@@ -79,7 +85,8 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
     });
     _tintController.forward(from: 0);
     // Pulse only during heavy weather
-    if (_current == WeatherState.heavyRain || _current == WeatherState.typhoon) {
+    if (_current == WeatherState.heavyRain ||
+        _current == WeatherState.typhoon) {
       if (!_pulseController.isAnimating) _pulseController.repeat(reverse: true);
     } else {
       _pulseController.stop();
@@ -91,22 +98,32 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
   int _dropCount(WeatherState s) {
     switch (s) {
       case WeatherState.clear:
-      case WeatherState.partlyCloudy: return 0;
-      case WeatherState.lightRain:    return 60;
-      case WeatherState.moderateRain: return 140;
-      case WeatherState.heavyRain:    return 280;
-      case WeatherState.typhoon:      return 450;
+      case WeatherState.partlyCloudy:
+        return 0;
+      case WeatherState.lightRain:
+        return 60;
+      case WeatherState.moderateRain:
+        return 140;
+      case WeatherState.heavyRain:
+        return 280;
+      case WeatherState.typhoon:
+        return 450;
     }
   }
 
   double _dropSpeed(WeatherState s) {
     switch (s) {
       case WeatherState.clear:
-      case WeatherState.partlyCloudy: return 0;
-      case WeatherState.lightRain:    return 4.5;
-      case WeatherState.moderateRain: return 7.5;
-      case WeatherState.heavyRain:    return 11.0;
-      case WeatherState.typhoon:      return 18.0;
+      case WeatherState.partlyCloudy:
+        return 0;
+      case WeatherState.lightRain:
+        return 4.5;
+      case WeatherState.moderateRain:
+        return 7.5;
+      case WeatherState.heavyRain:
+        return 11.0;
+      case WeatherState.typhoon:
+        return 18.0;
     }
   }
 
@@ -114,11 +131,16 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
     // typhoon has a strong horizontal wind angle
     switch (s) {
       case WeatherState.clear:
-      case WeatherState.partlyCloudy: return 0.0;
-      case WeatherState.typhoon:      return 0.45; // ~26° from vertical
-      case WeatherState.heavyRain:    return 0.20;
-      case WeatherState.moderateRain: return 0.10;
-      case WeatherState.lightRain:    return 0.05;
+      case WeatherState.partlyCloudy:
+        return 0.0;
+      case WeatherState.typhoon:
+        return 0.45; // ~26° from vertical
+      case WeatherState.heavyRain:
+        return 0.20;
+      case WeatherState.moderateRain:
+        return 0.10;
+      case WeatherState.lightRain:
+        return 0.05;
     }
   }
 
@@ -133,7 +155,11 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
 
   void _tickRain() {
     if (!mounted) return;
-    final size = context.size ?? Size.zero;
+    // Animation ticks can precede layout during hot reload. Use the last
+    // laid-out size, and wait if this render box has never been laid out.
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final size = box.size;
     if (size == Size.zero) return;
 
     // Ensure drop count matches current weather
@@ -164,22 +190,34 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
   Color _tintColor(WeatherState s) {
     switch (s) {
       case WeatherState.clear:
-      case WeatherState.partlyCloudy: return Colors.transparent;
-      case WeatherState.lightRain:    return const Color(0xFF90CAF9).withValues(alpha: 0.05);
-      case WeatherState.moderateRain: return const Color(0xFF5C85C8).withValues(alpha: 0.12);
-      case WeatherState.heavyRain:    return const Color(0xFF283593).withValues(alpha: 0.18);
-      case WeatherState.typhoon:      return const Color(0xFF1A237E).withValues(alpha: 0.24); // Lighter for visibility
+      case WeatherState.partlyCloudy:
+        return Colors.transparent;
+      case WeatherState.lightRain:
+        return const Color(0xFF90CAF9).withValues(alpha: 0.05);
+      case WeatherState.moderateRain:
+        return const Color(0xFF5C85C8).withValues(alpha: 0.12);
+      case WeatherState.heavyRain:
+        return const Color(0xFF283593).withValues(alpha: 0.18);
+      case WeatherState.typhoon:
+        return const Color(
+          0xFF1A237E,
+        ).withValues(alpha: 0.24); // Lighter for visibility
     }
   }
 
   Color _dropColor(WeatherState s) {
     switch (s) {
       case WeatherState.clear:
-      case WeatherState.partlyCloudy: return Colors.transparent;
-      case WeatherState.typhoon:      return const Color(0xFF5C72A6).withValues(alpha: 0.90);
-      case WeatherState.heavyRain:    return const Color(0xFF6B8BCC).withValues(alpha: 0.85);
-      case WeatherState.moderateRain: return const Color(0xFF7A9FE6).withValues(alpha: 0.80);
-      case WeatherState.lightRain:    return const Color(0xFF8BAAF0).withValues(alpha: 0.75);
+      case WeatherState.partlyCloudy:
+        return Colors.transparent;
+      case WeatherState.typhoon:
+        return const Color(0xFF5C72A6).withValues(alpha: 0.90);
+      case WeatherState.heavyRain:
+        return const Color(0xFF6B8BCC).withValues(alpha: 0.85);
+      case WeatherState.moderateRain:
+        return const Color(0xFF7A9FE6).withValues(alpha: 0.80);
+      case WeatherState.lightRain:
+        return const Color(0xFF8BAAF0).withValues(alpha: 0.75);
     }
   }
 
@@ -188,9 +226,10 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
   @override
   Widget build(BuildContext context) {
     // Nothing to render when clear and tint has faded
-    final showBanner = _current == WeatherState.heavyRain ||
-        _current == WeatherState.typhoon;
-    final showRain   = _current != WeatherState.clear && _current != WeatherState.partlyCloudy;
+    final showBanner =
+        _current == WeatherState.heavyRain || _current == WeatherState.typhoon;
+    final showRain =
+        _current != WeatherState.clear && _current != WeatherState.partlyCloudy;
 
     if (!showBanner && !showRain && _tintController.value == 0) {
       return const SizedBox.shrink();
@@ -204,9 +243,10 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
           AnimatedBuilder(
             animation: _tintController,
             builder: (_, _) {
-              final prev  = _tintColor(_previous);
-              final next  = _tintColor(_current);
-              final color = Color.lerp(prev, next, _tintController.value) ?? next;
+              final prev = _tintColor(_previous);
+              final next = _tintColor(_current);
+              final color =
+                  Color.lerp(prev, next, _tintController.value) ?? next;
               if (color == Colors.transparent) return const SizedBox.shrink();
               return Container(
                 decoration: BoxDecoration(
@@ -237,7 +277,6 @@ class _WeatherMapOverlayState extends State<WeatherMapOverlay>
                 repaint: _rainController,
               ),
             ),
-
         ],
       ),
     );
@@ -262,16 +301,16 @@ class _RainPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..strokeCap = StrokeCap.round;
+    final paint = Paint()..strokeCap = StrokeCap.round;
 
     for (final d in drops) {
       // Vary length and opacity based on drop's speedVariance
       final len = 14.0 + (d.speedVariance * 12.0);
       final dropOpacity = color.a * (0.5 + 0.5 * d.speedVariance);
-      
+
       paint.color = color.withValues(alpha: dropOpacity);
-      paint.strokeWidth = 1.2 + (d.speedVariance * 0.8); // Thicker drops so they are visible
+      paint.strokeWidth =
+          1.2 + (d.speedVariance * 0.8); // Thicker drops so they are visible
 
       final x1 = d.x;
       final y1 = d.y;
@@ -297,13 +336,17 @@ class _RainDrop {
   _RainDrop({required this.x, required this.y, required this.speedVariance});
 
   factory _RainDrop.random(math.Random rng, Size size) => _RainDrop(
-        x: rng.nextDouble() * (size.width + 600) - 300, // Spawn wider to account for wind
-        y: rng.nextDouble() * size.height,
-        speedVariance: rng.nextDouble() * 0.6,
-      );
+    x:
+        rng.nextDouble() * (size.width + 600) -
+        300, // Spawn wider to account for wind
+    y: rng.nextDouble() * size.height,
+    speedVariance: rng.nextDouble() * 0.6,
+  );
 
   void reset(math.Random rng, Size size) {
-    x = rng.nextDouble() * (size.width + 600) - 300; // Spawn wider to account for wind
+    x =
+        rng.nextDouble() * (size.width + 600) -
+        300; // Spawn wider to account for wind
     y = -20;
   }
 }
@@ -315,7 +358,7 @@ class _RainDrop {
 class StormBanner extends StatefulWidget {
   final WeatherState state;
   final VoidCallback? onClose;
-  
+
   const StormBanner({super.key, required this.state, this.onClose});
 
   @override
@@ -344,12 +387,12 @@ class _StormBannerState extends State<StormBanner>
   @override
   Widget build(BuildContext context) {
     final isTyphoon = widget.state == WeatherState.typhoon;
-    final bg    = isTyphoon
-        ? const Color(0xFF4A148C)
-        : const Color(0xFF0D47A1);
-    final icon  = isTyphoon ? Icons.cyclone_rounded : Icons.thunderstorm_outlined;
-    final label = isTyphoon ? 'TYPHOON ALERT' : 'HEAVY RAIN ALERT';
-    final sub   = isTyphoon
+    final bg = isTyphoon ? const Color(0xFF4A148C) : const Color(0xFF0D47A1);
+    final icon = isTyphoon
+        ? Icons.cyclone_rounded
+        : Icons.thunderstorm_outlined;
+    final label = AppEnvironment.sparkCoreEnabled ? 'SEVERE WEATHER ESTIMATE' : isTyphoon ? 'TYPHOON ALERT' : 'HEAVY RAIN ALERT';
+    final sub = isTyphoon
         ? 'Roads may be impassable. Seek safe shelter immediately.'
         : 'Flooding possible. Vulnerable roads may be auto-escalated.';
 
@@ -357,7 +400,9 @@ class _StormBannerState extends State<StormBanner>
       animation: _blink,
       builder: (_, _) {
         return Container(
-          margin: const EdgeInsets.only(top: 8), // Replaced massive top margin since we pushed it down
+          margin: const EdgeInsets.only(
+            top: 8,
+          ), // Replaced massive top margin since we pushed it down
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
             color: bg.withValues(alpha: 0.92),
@@ -410,7 +455,11 @@ class _StormBannerState extends State<StormBanner>
               if (widget.onClose != null)
                 GestureDetector(
                   onTap: widget.onClose,
-                  child: const Icon(Icons.close, color: Colors.white70, size: 20),
+                  child: const Icon(
+                    Icons.close,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
                 ),
             ],
           ),

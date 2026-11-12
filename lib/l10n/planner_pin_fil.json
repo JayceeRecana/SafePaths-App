@@ -1,0 +1,22 @@
+{
+  "Choose starting point": "Piliin ang pagsisimulan",
+  "Choose destination": "Piliin ang destinasyon",
+  "Starting point": "Pagsisimulan",
+  "Move the map to position the pin.": "Igalaw ang mapa upang ilagay ang pin.",
+  "Choose a point within the study area.": "Pumili ng lokasyon sa loob ng sakop ng pag-aaral.",
+  "No monitored road identified near this pin.": "Walang natukoy na minomonitor na kalsada malapit sa pin na ito.",
+  "Nearby road": "Kalapit na kalsada",
+  "Saved road information. Check current conditions.": "Naka-save na impormasyon ng kalsada. Alamin ang kasalukuyang kondisyon.",
+  "Choosing a point does not confirm a safe route. The planner checks routes next.": "Ang pagpili ng lokasyon ay hindi kumpirmasyon ng ligtas na ruta. Susuriin ng planner ang mga ruta pagkatapos nito.",
+  "Use this starting point": "Gamitin itong pagsisimulan",
+  "Use this destination": "Gamitin itong destinasyon",
+  "Search could not finish. Please try again.": "Hindi natapos ang paghahanap. Subukan muli.",
+  "Pinned Location": "Naka-pin na lokasyon",
+  "Confirming location...": "Kinukumpirma ang lokasyon...",
+  "The selected point could not be read. Retry or move the map.": "Hindi mabasa ang napiling lokasyon. Subukan muli o igalaw ang mapa.",
+  "Retry selected point": "Basahin muli ang napiling lokasyon",
+  "No local matches. Use Search to look within this area.": "Walang lokal na tugma. Gamitin ang Paghahanap upang maghanap sa lugar na ito.",
+  "Catalog place ? Check the entrance on the map": "Lugar sa talaan ? Suriin ang pasukan sa mapa",
+  "Monitored road": "Minomonitor na kalsada",
+  "Could not move the map. Please retry.": "Hindi maigalaw ang mapa. Subukan muli."
+}

@@ -1,17 +1,27 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    match /reports/{imageId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+    function owns(uid) { return request.auth != null && request.auth.token.email_verified == true && request.auth.uid == uid; }
+    function validImage() {
+      return request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png)');
     }
-    match /feedbacks/screenshots/{imageId} {
-      allow read: if request.auth != null; // admin-reviewable, not public
-      allow write: if request.auth != null
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+    match /reports/{uid}/{imageId} {
+      allow read: if true;
+      allow create: if owns(uid) && validImage();
+      allow delete: if owns(uid);
     }
+    match /avatars/{uid}/{imageId} {
+      allow read: if true;
+      allow create: if owns(uid) && validImage();
+      allow delete: if owns(uid);
+    }
+    match /feedback/{uid}/{imageId} {
+      allow read: if true;
+      allow create: if owns(uid) && validImage();
+      allow delete: if owns(uid);
+    }
+    // Existing published image URLs remain readable; legacy writes are closed.
+    match /{allPaths=**} { allow read: if true; }
   }
 }

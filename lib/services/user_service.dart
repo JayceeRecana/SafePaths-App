@@ -1,34 +1,44 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
-import 'dart:math';
+import 'app_state_service.dart';
+import 'notification_service.dart';
 
 enum UserRole { user, admin }
 
 class UserService {
   static const String _roleKey = 'user_role';
 
-  // Get the true Firebase UID
   static Future<String> getUserId() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      return user.uid;
+    if (user == null || user.isAnonymous) {
+      throw FirebaseAuthException(
+        code: 'unauthenticated',
+        message: 'Please sign in again.',
+      );
     }
-    // Fallback: Login anonymously
-    try {
-      final userCredential = await FirebaseAuth.instance.signInAnonymously();
-      return userCredential.user!.uid;
-    } catch (e) {
-      // Very worst-case fallback if network is entirely down on first launch
-      debugPrint('[CRITICAL_WARNING] Firebase Anonymous Auth Failed. Using local offline fallback.');
-      final prefs = await SharedPreferences.getInstance();
-      String? offlineId = prefs.getString('offline_fallback_id');
-      if (offlineId == null) {
-        offlineId = 'anon_offline_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(10000)}';
-        await prefs.setString('offline_fallback_id', offlineId);
-      }
-      return offlineId;
+    return user.uid;
+  }
+
+  static Future<void> touchSession({bool force = false}) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (force ||
+        prefs.getString('session_uid') != uid ||
+        now - (prefs.getInt('session_last_activity') ?? 0) >= 30000) {
+      await prefs.setString('session_uid', uid);
+      await prefs.setInt('session_last_activity', now);
     }
+  }
+
+  static Future<DateTime?> lastActivity() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString('session_uid') !=
+        FirebaseAuth.instance.currentUser?.uid)
+      return null;
+    final ms = prefs.getInt('session_last_activity');
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
   }
 
   // Save user role locally for quick UI routing
@@ -49,8 +59,7 @@ class UserService {
   }
 
   static Future<void> setLoggedIn(bool isLoggedIn) async {
-    // Firebase Auth automatically manages session state.
-    // We don't need to manually store boolean login state anymore.
+    if (isLoggedIn) await touchSession(force: true);
   }
 
   static Future<bool> isLoggedIn() async {
@@ -58,8 +67,14 @@ class UserService {
   }
 
   static Future<void> clearUserData() async {
+    try {
+      await NotificationService.instance.clearDeviceToken();
+    } catch (_) {}
     await FirebaseAuth.instance.signOut();
+    await AppStateService.instance.clearSession();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_roleKey);
+    await prefs.remove('session_uid');
+    await prefs.remove('session_last_activity');
   }
 }

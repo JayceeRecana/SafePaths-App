@@ -1,22 +1,25 @@
+import '../theme/app_palette.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../l10n/app_strings.dart';
 import '../screens/shared/settings_screen.dart';
 import '../screens/user/profile_screen.dart';
+import '../services/app_state_service.dart';
+import 'user_avatar.dart';
 
 class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
   final String? title;
-  final bool showBackButton;
-  final bool showProfile;
-  final bool showSettingsAction;
-  final VoidCallback? onBackPressed;
-  final VoidCallback? onSettingsPressed;
+  final bool showBackButton, showProfile, showSettingsAction;
+  final bool inset;
+  final VoidCallback? onBackPressed, onSettingsPressed;
   final List<Widget>? actions;
-
   const AppTopBar({
     super.key,
     this.title,
+    this.inset = false,
     this.showBackButton = false,
     this.showProfile = true,
     this.showSettingsAction = true,
@@ -24,124 +27,121 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
     this.onSettingsPressed,
     this.actions,
   });
-
   @override
-  Size get preferredSize => const Size.fromHeight(64);
-
+  Size get preferredSize => Size.fromHeight(inset ? 80 : 64);
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-        child: AppBar(
-          backgroundColor: const Color(0xFFF8FAFC).withValues(alpha: 0.7),
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          titleSpacing: 16,
-          title: Row(
-            children: [
-              if (showBackButton)
-                GestureDetector(
-                  onTap: onBackPressed ?? () {
-                    if (Navigator.canPop(context)) Navigator.pop(context);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Icon(
-                      Icons.arrow_back,
-                      color: AppColors.primary,
-                      size: 24,
-                    ),
-                  ),
-                ),
-              
-              if (showProfile && !showBackButton)
-                GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                    );
-                  },
-                  child: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                      color: AppColors.primaryContainer,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.person,
-                      color: AppColors.onPrimaryContainer,
-                      size: 18,
-                    ),
-                  ),
-                ),
-                
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  title ?? 'SafePaths',
-                  style: GoogleFonts.manrope(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.5,
-                    color: AppColors.primary,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            ...?actions,
-            if (!showSettingsAction)
-              const SizedBox(width: 16)
-            else
-              Semantics(
-                label: 'Settings',
-                button: true,
-                child: GestureDetector(
-                  onTap: () {
-                  if (onSettingsPressed != null) {
-                    onSettingsPressed!();
-                    return;
-                  }
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const SettingsScreen(),
-                    ),
-                  );
-                },
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  alignment: Alignment.center,
-                  margin: const EdgeInsets.only(right: 16),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Icon(
-                    Icons.settings_outlined,
-                    color: Colors.grey.shade500,
-                    size: 24,
-                  ),
-                ),
-              ),
-            ),
-          ],
+    if (!inset) return _toolbar(context);
+    final p = AppPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: p.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: p.outlineVariant.withValues(alpha: .35)),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: _toolbar(context),
         ),
       ),
     );
   }
+
+  Widget _toolbar(BuildContext context) => ClipRRect(
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+      child: AppBar(
+        toolbarHeight: inset ? 60 : 64,
+        backgroundColor: inset
+            ? AppPalette.of(context).surfaceContainerLowest
+            : AppPalette.of(context).surface.withValues(alpha: 0.94),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        automaticallyImplyLeading: false,
+        titleSpacing: inset
+            ? 2
+            : showBackButton || showProfile
+            ? 8
+            : 20,
+        leadingWidth: showProfile && !showBackButton ? (inset ? 60 : 68) : null,
+        actionsPadding: EdgeInsetsDirectional.only(end: inset ? 6 : 12),
+        leading: showBackButton
+            ? IconButton(
+                tooltip: tr(context, 'Back'),
+                icon: const Icon(Icons.arrow_back),
+                onPressed:
+                    onBackPressed ??
+                    () {
+                      if (Navigator.canPop(context)) Navigator.pop(context);
+                    },
+              )
+            : showProfile
+            ? Padding(
+                padding: EdgeInsetsDirectional.only(start: inset ? 4 : 12),
+                child: ListenableBuilder(
+                  listenable: AppStateService.instance,
+                  builder: (context, _) {
+                    final uid = Firebase.apps.isEmpty
+                        ? null
+                        : FirebaseAuth.instance.currentUser?.uid;
+                    final users = AppStateService.instance.users.where(
+                      (user) => user.id == uid,
+                    );
+                    final user = users.isEmpty ? null : users.first;
+                    return IconButton(
+                      tooltip: tr(context, 'Profile'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const ProfileScreen(),
+                        ),
+                      ),
+                      icon: UserAvatar(
+                        photoUrl: user?.photoUrl,
+                        size: inset ? 32 : 36,
+                        iconSize: 18,
+                      ),
+                    );
+                  },
+                ),
+              )
+            : null,
+        title: Text(
+          title == null ? 'SafePaths' : tr(context, title!),
+          style: GoogleFonts.manrope(
+            fontSize: inset ? 18 : 20,
+            fontWeight: FontWeight.w800,
+            color: AppPalette.of(context).primary,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          ...?actions,
+          if (showSettingsAction)
+            IconButton(
+              tooltip: tr(context, 'Settings'),
+              icon: Icon(Icons.settings_outlined, size: inset ? 21 : 24),
+              style: inset
+                  ? IconButton.styleFrom(
+                      foregroundColor: AppPalette.of(context).onSurfaceVariant,
+                      backgroundColor: AppPalette.of(
+                        context,
+                      ).surfaceContainerLow,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      minimumSize: const Size(48, 48),
+                    )
+                  : null,
+              onPressed:
+                  onSettingsPressed ??
+                  () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  ),
+            ),
+        ],
+      ),
+    ),
+  );
 }

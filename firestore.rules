@@ -1,41 +1,111 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function verified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
     function isAdmin() {
-      return request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return verified() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    function mediaServerManaged() {
+      return exists(/databases/$(database)/documents/system/media)
+        && get(/databases/$(database)/documents/system/media).data.get('enabled', false) == true;
+    }
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null && request.auth.uid == userId;
-      allow update: if request.auth != null && request.auth.uid == userId || isAdmin();
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow create: if (!mediaServerManaged() || !request.resource.data.keys().hasAny(['photoUrl','profileRevision']))
+        && (isAdmin() || (request.auth != null && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['name', 'email', 'role', 'trustScore',
+          'verifiedReports', 'dismissedReports', 'createdAt', 'location', 'photoUrl',
+          'fcmTokens', 'dismissedAlertIds', 'lastFcmTokenUpdate', 'updatedAt'])
+        && request.resource.data.get('role', 'user') == 'user'
+        && request.resource.data.get('trustScore', 50) == 50
+        && request.resource.data.get('verifiedReports', 0) == 0
+        && request.resource.data.get('dismissedReports', 0) == 0));
+      allow update: if (!mediaServerManaged() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['photoUrl','profileRevision','name','location','email']))
+        && (isAdmin() || (request.auth != null && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'email', 'location', 'photoUrl', 'fcmTokens', 'dismissedAlertIds', 'updatedAt', 'lastFcmTokenUpdate'])));
       allow delete: if isAdmin();
     }
 
+    function roadsServerManaged() {
+      return exists(/databases/$(database)/documents/system/road_maintenance)
+        && get(/databases/$(database)/documents/system/road_maintenance).data.get('enabled', false) == true;
+    }
     match /roads/{document=**} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() && !roadsServerManaged();
     }
+    match /road_maintenance_requests/{id} { allow read, write: if false; }
+    match /road_maintenance_audits/{id} { allow read: if isAdmin(); allow write: if false; }
 
-    match /alerts/{document=**} {
+    function communicationServerManaged() {
+      return exists(/databases/$(database)/documents/system/communications)
+        && get(/databases/$(database)/documents/system/communications).data.get('enabled', false) == true;
+    }
+    match /alerts/{id} {
       allow read: if true;
+      allow write: if isAdmin() && !communicationServerManaged();
+    }
+
+    match /alert_templates/{document=**} {
+      allow read: if verified();
       allow write: if isAdmin();
     }
 
-    match /reports/{document=**} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if isAdmin();
+    match /reports/{reportId} {
+      allow read: if verified();
+      // Resident submissions go through the authenticated server transaction.
+      allow create, update, delete: if false;
     }
+
+    match /report_requests/{id} { allow read, write: if false; }
+    match /followup_requests/{id} { allow read, write: if false; }
+    match /followup_audits/{id} { allow read: if isAdmin(); allow write: if false; }
+    match /incident_rewards/{id} { allow read, write: if false; }
+    match /report_slots/{id} { allow read, write: if false; }
+    match /admin_requests/{id} { allow read, write: if false; }
+    match /admin_audits/{id} { allow read: if isAdmin(); allow write: if false; }
+    match /notification_outbox/{id} { allow read, write: if false; }
+    match /push_devices/{id} { allow read, write: if false; }
+    match /push_token_claims/{id} { allow read, write: if false; }
+    match /push_worker_requests/{id} { allow read, write: if false; }
+    match /clarification_requests/{id} { allow read, write: if false; }
+    match /report_clarifications/{id} {
+      allow read: if verified() && (resource.data.get('userId', null) == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+    match /report_messages/{id} {
+      allow read: if verified() && (resource.data.get('userId', null) == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+    match /road_incidents/{roadId} {
+      allow read: if verified();
+      allow write: if false;
+      match /responses/{responseId} {
+        allow read: if verified() && (resource.data.uid == request.auth.uid || isAdmin());
+        allow write: if false;
+      }
+    }
+    match /incident_requests/{id} { allow read, write: if false; }
+    match /incident_audits/{id} { allow read: if isAdmin(); allow write: if false; }
+
+    match /system/risk_job { allow read: if verified(); }
+    match /system/road_inputs { allow read: if isAdmin(); allow write: if isAdmin() && !roadsServerManaged(); }
 
     match /system/weather {
-      allow read: if request.auth != null;
-      allow write: if isAdmin();
+      allow read: if verified();
+      allow write: if isAdmin() && (!exists(/databases/$(database)/documents/system/weather) || resource.data.get('sparkManaged', false) == false) && request.resource.data.get('sparkManaged', false) == false;
     }
 
-    match /system/{document=**} {
-      allow read, write: if isAdmin();
+    // Server-only worker state must not inherit the generic admin rule.
+    match /system/{id} {
+      allow read, write: if isAdmin() && !(id in ['backend_rollout','core_cache','core_budget','core_setup','risk_job','weather','communications','media','road_maintenance','road_inputs']);
     }
+    match /core_worker_requests/{id} { allow read, write: if false; }
+    match /weather_requests/{id} { allow read, write: if false; }
 
     match /system_audits/{document=**} {
       allow read, write: if isAdmin();
@@ -45,16 +115,40 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    match /profile_requests/{id} { allow read, write: if false; }
+    match /media_uploads/{id} { allow read, write: if false; }
+    match /media_limits/{id} { allow read, write: if false; }
+    match /communication_requests/{id} { allow read, write: if false; }
+    match /communication_audits/{id} { allow read: if isAdmin(); allow write: if false; }
+    match /feedback_messages/{id} {
+      allow read: if verified() && (resource.data.get('userId', null) == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
     match /feedbacks/{feedbackId} {
-      allow create: if request.auth != null
-        && request.resource.data.rating is int
-        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5
-        && (request.resource.data.userId == null || request.resource.data.userId == request.auth.uid);
-      allow read, update, delete: if isAdmin();
+      allow create: if !communicationServerManaged() && verified()
+        && request.resource.data.keys().hasOnly(['category','rating','comments','hasAttachment','allowFollowUp','timestamp','userId','imageUrl','status'])
+        && request.resource.data.rating is int && request.resource.data.rating >= 1 && request.resource.data.rating <= 5
+        && request.resource.data.get('status','new') == 'new'
+        && request.resource.data.get('userId',null) in [null,request.auth.uid];
+      allow read: if verified() && (resource.data.get('userId', null) == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin() && !communicationServerManaged();
+    }
+
+    match /error_logs/{document=**} {
+      allow create: if verified()
+        && request.resource.data.keys().hasOnly(['type', 'errorCode', 'timestamp'])
+        && request.resource.data.type == 'feedback_submission_error'
+        && request.resource.data.errorCode in ['timeout', 'invalid-data', 'unexpected',
+          'firebase-error', 'permission-denied', 'unauthenticated', 'unavailable',
+          'deadline-exceeded', 'resource-exhausted', 'network-request-failed',
+          'canceled', 'unknown', 'object-not-found', 'unauthorized',
+          'quota-exceeded', 'retry-limit-exceeded']
+        && request.resource.data.timestamp == request.time;
     }
 
     match /analytics/{document=**} {
-      allow read, write: if request.auth != null;
+      allow read: if isAdmin();
+      allow write: if verified();
     }
   }
 }

@@ -1,9 +1,10 @@
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import '../utils/location_fix.dart';
 
 class LocationService {
   /// Request location permissions and get the current position.
-  static Future<Position?> getCurrentPosition() async {
+  static Future<geo.Position?> getCurrentFix() async {
     bool serviceEnabled;
     geo.LocationPermission permission;
 
@@ -29,23 +30,40 @@ class LocationService {
     }
 
     // When we reach here, permissions are granted and we can continue accessing the position of the device.
-    final geoPosition = await geo.Geolocator.getCurrentPosition(
-      locationSettings: const geo.LocationSettings(
-        accuracy: geo.LocationAccuracy.high,
-      )
-    );
-
-    return Position(geoPosition.longitude, geoPosition.latitude);
+    try {
+      return await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (e) {
+      // Timeout or error, try last known position
+      final lastKnown = await geo.Geolocator.getLastKnownPosition().timeout(
+        const Duration(seconds: 3),
+      );
+      return lastKnown;
+    }
   }
 
-  /// Returns a continuous stream of the device's location updates.
-  static Stream<Position>? getPositionStream() {
-    // Only return a stream if permissions are likely granted
-    return geo.Geolocator.getPositionStream(
-      locationSettings: const geo.LocationSettings(
-        accuracy: geo.LocationAccuracy.high,
-        distanceFilter: 5, // Update every 5 meters
-      ),
-    ).map((geoPosition) => Position(geoPosition.longitude, geoPosition.latitude));
+  /// Planner callers retain the validated coordinate-only contract. Navigation
+  /// needs the raw timestamp/accuracy to validate and explain rejected fixes.
+  static Future<Position?> getCurrentPosition() async {
+    final fix = await getCurrentFix();
+    return fix != null && usableLocationFix(fix, now: DateTime.now())
+        ? Position(fix.longitude, fix.latitude)
+        : null;
+  }
+
+  // The Android plugin shares its first stream across subscribers. All callers
+  // must use these settings; consumer features throttle their own work instead.
+  static const trackingSettings = geo.LocationSettings(
+    accuracy: geo.LocationAccuracy.high,
+    distanceFilter: 0,
+  );
+
+  /// Returns a continuous stream of the device's location updates exposing accuracy and heading.
+  static Stream<geo.Position> getPositionStream() {
+    return geo.Geolocator.getPositionStream(locationSettings: trackingSettings);
   }
 }

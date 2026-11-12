@@ -1,0 +1,6 @@
+name: safepaths_localization_tool
+publish_to: none
+environment:
+  sdk: ^3.11.4
+dependencies:
+  analyzer: 10.1.0

@@ -1,0 +1,7 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.spark-proof.indexes.json"
+  },
+  "storage": { "rules": "storage.rules" }
+}

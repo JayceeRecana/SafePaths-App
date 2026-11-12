@@ -61,4 +61,5 @@ class AppColors {
   static const Color passable = Color(0xFF22C55E);
   static const Color partial = Color(0xFFEAB308);
   static const Color notPassable = Color(0xFFEF4444);
+  static const Color warning = Color(0xFFF59E0B);
 }

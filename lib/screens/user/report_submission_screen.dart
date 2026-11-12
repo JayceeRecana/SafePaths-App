@@ -1,12 +1,27 @@
+import '../../widgets/report_photo_attachment_card.dart';
+import '../../widgets/report_flood_level_selector.dart';
+import '../../theme/app_palette.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/formatters.dart';
 import 'package:flutter/material.dart';
+import '../../config/app_environment.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../theme/app_colors.dart';
 import '../../widgets/app_top_bar.dart';
 import '../../services/app_state_service.dart';
 import 'dart:io';
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import '../../utils/report_image.dart';
+import 'package:path_provider/path_provider.dart';
+import '../../services/report_submission_coordinator.dart';
+import '../../services/report_photo_uploader.dart';
+import '../../services/spark_proof_client.dart';
+import '../../widgets/report_upload_progress.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../utils/image_watermark_util.dart';
+import '../../utils/geo_utils.dart';
 import 'location_picker_screen.dart';
 
 class ReportSubmissionScreen extends StatefulWidget {
@@ -18,21 +33,33 @@ class ReportSubmissionScreen extends StatefulWidget {
 }
 
 class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
-  int _selectedFloodLevel = 2; // 0=Low, 1=Medium, 2=High
+  int? _selectedFloodLevel; // Explicit observation: 0=Low, 1=Medium, 2=High.
+  bool _isEmergency = false;
   String? _selectedRoadId;
   final _descriptionController = TextEditingController();
   bool _showSuccess = false;
   File? _selectedImage;
-  bool _isUploading = false;
+  final Set<String> _temporaryPhotos = {};
   final ImagePicker _picker = ImagePicker();
+  final _submission = ReportSubmissionCoordinator();
+  final _photoUploader = ReportPhotoUploader();
+  bool get _isUploading => _submission.isBusy;
+  bool _isProcessingImage = false;
   Map<String, dynamic>? _manualLocation;
+  DateTime? _observedAt;
   bool _isLocating = true;
+  int _locationGeneration = 0;
   String _locationStatusMessage = 'Detecting location...';
 
   @override
   void initState() {
     super.initState();
+    _submission.addListener(_onSubmissionChanged);
     _selectedRoadId = widget.prefilledRoadId;
+    if (!AppEnvironment.reportsEnabled) {
+      _isLocating = false;
+      return;
+    }
     if (_selectedRoadId == null) {
       _detectLocation();
     } else {
@@ -42,9 +69,15 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
     }
   }
 
+  void _onSubmissionChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _detectLocation() async {
+    final generation = ++_locationGeneration;
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!mounted || generation != _locationGeneration) return;
       if (!serviceEnabled) {
         setState(() {
           _isLocating = false;
@@ -53,12 +86,15 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
         return;
       }
       LocationPermission permission = await Geolocator.checkPermission();
+      if (!mounted || generation != _locationGeneration) return;
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
+        if (!mounted || generation != _locationGeneration) return;
       }
-      if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
         Future.delayed(const Duration(seconds: 5), () {
-          if (mounted && _isLocating) {
+          if (mounted && generation == _locationGeneration && _isLocating) {
             setState(() {
               _locationStatusMessage = 'Still locating GPS (Poor signal)...';
             });
@@ -76,12 +112,23 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
         } catch (e) {
           position = await Geolocator.getLastKnownPosition();
           if (position == null) rethrow;
-          if (position.timestamp != null && DateTime.now().difference(position.timestamp!).inMinutes > 5) {
+          if (DateTime.now().difference(position.timestamp).inMinutes > 5) {
             throw Exception('GPS_STALE');
           }
         }
-        _manualLocation = {'lat': position.latitude, 'lng': position.longitude};
-        _snapToNearestRoad(position.latitude, position.longitude, isAutoDetect: true);
+        if (!mounted || generation != _locationGeneration) return;
+        _manualLocation = {
+          'lat': position.latitude,
+          'lng': position.longitude,
+          'source': 'gps',
+          'gpsCapturedAt': position.timestamp.toUtc().toIso8601String(),
+          'gpsAccuracyMeters': position.accuracy,
+        };
+        _snapToNearestRoad(
+          position.latitude,
+          position.longitude,
+          isAutoDetect: true,
+        );
       } else {
         setState(() {
           _isLocating = false;
@@ -89,13 +136,17 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && generation == _locationGeneration) {
         setState(() {
           _isLocating = false;
           _locationStatusMessage = 'GPS unavailable.';
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('GPS unavailable — please use the map pin')),
+          SnackBar(
+            content: Text(
+              tr(context, 'GPS unavailable — please use the map pin'),
+            ),
+          ),
         );
       }
     }
@@ -104,27 +155,17 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
   void _snapToNearestRoad(double lat, double lng, {bool isAutoDetect = false}) {
     String? nearestRoadId;
     double minGlobalDistance = double.infinity;
-    
+
     for (var road in AppStateService.instance.roads) {
-      if (road.geometry != null && road.geometry!['coordinates'] != null) {
-        final coords = road.geometry!['coordinates'] as List<dynamic>;
-        for (var coord in coords) {
-          double? rLng, rLat;
-          if (coord is Map) {
-            rLng = (coord['lon'] as num?)?.toDouble();
-            rLat = (coord['lat'] as num?)?.toDouble();
-          } else if (coord is List && coord.length >= 2) {
-            rLng = (coord[0] as num?)?.toDouble();
-            rLat = (coord[1] as num?)?.toDouble();
-          }
-          if (rLng == null || rLat == null) continue;
-            
-          double dist = Geolocator.distanceBetween(lat, lng, rLat, rLng);
-          if (dist < minGlobalDistance) {
-            minGlobalDistance = dist;
-            nearestRoadId = road.id;
-          }
-        }
+      if (road.geometry == null) continue;
+      final distance = GeoUtils.distanceToGeometryMeters(
+        lat,
+        lng,
+        road.geometry,
+      );
+      if (distance < minGlobalDistance) {
+        minGlobalDistance = distance;
+        nearestRoadId = road.id;
       }
     }
 
@@ -136,452 +177,876 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
           _locationStatusMessage = 'Road pre-selected from map.';
         } else if (minGlobalDistance <= 500 && nearestRoadId != null) {
           _selectedRoadId = nearestRoadId;
-          _locationStatusMessage = isAutoDetect ? 'Detected on monitored network.' : 'Pinned to monitored road.';
+          _locationStatusMessage = isAutoDetect
+              ? 'Detected on monitored network.'
+              : 'Pinned to monitored road.';
+        } else if (_isEmergency && nearestRoadId != null) {
+          _selectedRoadId = nearestRoadId;
+          _locationStatusMessage = 'SOS Location Pinned (Nearest Road Linked).';
         } else {
           _selectedRoadId = null;
-          _locationStatusMessage = 'Location is too far from any monitored road.';
+          _locationStatusMessage =
+              'Location is too far from any monitored road.';
         }
       });
     }
   }
 
   Future<void> _pickImage() async {
-    try {
-      XFile? image;
+    if (_isProcessingImage || _isUploading) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppPalette.of(context).surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                tr(context, 'ATTACH EVIDENCE PHOTO'),
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.0,
+                  color: AppPalette.of(context).primary,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                tr(context, 'Choose Photo Source'),
+                style: GoogleFonts.manrope(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppPalette.of(context).onSurface,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppPalette.of(
+                      context,
+                    ).primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.camera_alt,
+                    color: AppPalette.of(context).primary,
+                  ),
+                ),
+                title: Text(
+                  tr(context, 'Take Photo (Camera)'),
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    color: AppPalette.of(context).onSurface,
+                  ),
+                ),
+                subtitle: Text(
+                  tr(context, 'Capture live incident evidence on-site'),
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: AppPalette.of(context).onSurfaceVariant,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _processImageCapture(ImageSource.camera);
+                },
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppPalette.of(
+                      context,
+                    ).secondary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.photo_library,
+                    color: AppPalette.of(context).secondary,
+                  ),
+                ),
+                title: Text(
+                  tr(context, 'Choose from Gallery'),
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    color: AppPalette.of(context).onSurface,
+                  ),
+                ),
+                subtitle: Text(
+                  tr(context, 'Select an existing photo from device storage'),
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: AppPalette.of(context).onSurfaceVariant,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _processImageCapture(ImageSource.gallery);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _clearTemporaryPhotos({String? keep}) async {
+    final discard = _temporaryPhotos.where((path) => path != keep).toList();
+    for (final path in discard) {
+      _temporaryPhotos.remove(path);
       try {
-        image = await _picker.pickImage(source: ImageSource.camera, imageQuality: 70);
-      } catch (e) {
-        try {
-          image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
-        } catch (e2) {
-          debugPrint('Image pick failed: $e2');
-        }
-      }
-      if (image != null) {
-        setState(() {
-          _selectedImage = File(image!.path);
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to pick image: $e')));
+        await File(path).delete();
+      } catch (_) {}
     }
   }
 
+  Future<void> _processImageCapture(ImageSource source) async {
+    if (_isProcessingImage || _isUploading) return;
+    setState(() => _isProcessingImage = true);
+    try {
+      final XFile? picked = await _picker.pickImage(source: source);
 
+      if (!mounted || picked == null) return;
+      if (await picked.length() > maxReportPhotoBytes) {
+        throw const FormatException(
+          'Please choose an image smaller than 10 MB.',
+        );
+      }
+      if (!mounted) return;
+
+      setState(() {
+        _isProcessingImage = true;
+      });
+
+      // Get road name or default locale
+      String roadName = AppEnvironment.area.name;
+      if (_selectedRoadId != null) {
+        final road = AppStateService.instance.roads.firstWhere(
+          (r) => r.id == _selectedRoadId,
+          orElse: () => RoadStatus(
+            id: '',
+            name: AppEnvironment.area.name,
+            status: 'passable',
+            notes: '',
+            updatedAt: DateTime.now(),
+          ),
+        );
+        if (road.name.isNotEmpty) {
+          roadName = '${road.name}, ${AppEnvironment.area.name}';
+        }
+      }
+
+      // Coordinates: only stamp if real location is selected or acquired
+      double? lat;
+      double? lng;
+      if (_manualLocation != null) {
+        lat = (_manualLocation!['lat'] as num?)?.toDouble();
+        lng = (_manualLocation!['lng'] as num?)?.toDouble();
+      }
+
+      // Determine authentic capture/modification time
+      DateTime photoTimestamp;
+      if (source == ImageSource.gallery) {
+        try {
+          photoTimestamp = File(picked.path).lastModifiedSync();
+        } catch (_) {
+          photoTimestamp = DateTime.now();
+        }
+      } else {
+        photoTimestamp = DateTime.now();
+      }
+
+      // Validate the source encoding and decode off the UI thread before watermarking.
+      final normalized = await compute(
+        normalizeReportPhoto,
+        await picked.readAsBytes(),
+      );
+      if (!mounted) return;
+      final tempDir = await getTemporaryDirectory();
+      final normalizedFile = File(
+        '${tempDir.path}/report_input_${DateTime.now().microsecondsSinceEpoch}.jpg',
+      );
+      _temporaryPhotos.add(normalizedFile.path);
+      await normalizedFile.writeAsBytes(normalized);
+      if (!mounted) return;
+
+      // Apply watermark
+      final watermarked = await ImageWatermarkUtil.applyWatermark(
+        sourceFile: normalizedFile,
+        locationName: roadName,
+        lat: lat,
+        lng: lng,
+        timestamp: photoTimestamp,
+        isLiveCamera: source == ImageSource.camera,
+      );
+
+      _temporaryPhotos.add(watermarked.path);
+      if (mounted) {
+        setState(() {
+          _selectedImage = watermarked;
+          _submission.invalidatePhoto();
+          _photoUploader.forget();
+          _isProcessingImage = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(tr(context, 'Photo attached successfully.')),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error capturing/watermarking image: $e');
+      if (mounted) {
+        setState(() {
+          _isProcessingImage = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e is FormatException
+                  ? e.message
+                  : tr(
+                      context,
+                      'Unable to process this photo. Please choose another JPG or PNG image.',
+                    ),
+            ),
+          ),
+        );
+      }
+    } finally {
+      await _clearTemporaryPhotos(keep: mounted ? _selectedImage?.path : null);
+      if (mounted) setState(() => _isProcessingImage = false);
+    }
+  }
 
   @override
   void dispose() {
+    _submission.removeListener(_onSubmissionChanged);
+    _submission.dispose();
+    _photoUploader.dispose();
+    unawaited(_clearTemporaryPhotos());
     _descriptionController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!AppEnvironment.reportsEnabled) {
+      return Scaffold(
+        appBar: AppBar(title: Text(tr(context, 'Reports'))),
+        body: Center(
+          child: Text(
+            tr(
+              context,
+              'Photo reports are unavailable in SafePaths Test.\nUse the admin road-status screen to simulate a closure.',
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    return PopScope(canPop: !_isUploading, child: _buildForm(context));
+  }
+
+  Widget _buildForm(BuildContext context) {
     final appState = AppStateService.instance;
 
     return Scaffold(
       appBar: AppTopBar(
         showBackButton: true,
-        onBackPressed: () => Navigator.of(context).pop(),
+        onBackPressed: () {
+          if (!_isUploading) Navigator.of(context).pop();
+        },
       ),
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppPalette.of(context).surface,
       body: SafeArea(
         bottom: true,
         child: Stack(
           children: [
-            SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header
-                  Text(
-                    'NEW INCIDENT REPORT',
-                    style: GoogleFonts.inter(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Emergency Submission',
-                    style: GoogleFonts.manrope(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.5,
-                      color: AppColors.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Provide essential details quickly. Your location is being monitored.',
-                    style: GoogleFonts.inter(
-                      fontSize: 15,
-                      color: AppColors.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Detected Location Banner
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: _selectedRoadId != null 
-                        ? AppColors.surfaceContainerLowest 
-                        : AppColors.errorContainer.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
-                        color: _selectedRoadId != null 
-                          ? AppColors.primary.withValues(alpha: 0.2)
-                          : AppColors.error,
-                        width: 1,
+            AbsorbPointer(
+              absorbing: _isUploading,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header
+                    Text(
+                      tr(context, 'NEW INCIDENT REPORT'),
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.5,
+                        color: AppPalette.of(context).primary,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              _selectedRoadId != null ? Icons.check_circle : Icons.warning,
-                              color: _selectedRoadId != null ? AppColors.primary : AppColors.error,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _selectedRoadId != null ? 'DETECTED LOCATION' : 'LOCATION ERROR',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.5,
-                                color: _selectedRoadId != null ? AppColors.primary : AppColors.error,
-                              ),
-                            ),
-                          ],
+                    const SizedBox(height: 4),
+                    Text(
+                      tr(
+                        context,
+                        _isEmergency
+                            ? 'Urgent report'
+                            : 'Report road conditions',
+                      ),
+                      style: GoogleFonts.manrope(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.5,
+                        color: AppPalette.of(context).onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      tr(
+                        context,
+                        'Provide essential details. Your selected location will be included in this report.',
+                      ),
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        color: AppPalette.of(context).onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Detected Location Banner
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: _selectedRoadId != null
+                            ? AppPalette.of(context).surfaceContainerLowest
+                            : AppPalette.of(
+                                context,
+                              ).errorContainer.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: _selectedRoadId != null
+                              ? AppPalette.of(
+                                  context,
+                                ).primary.withValues(alpha: 0.2)
+                              : AppPalette.of(context).error,
+                          width: 1,
                         ),
-                        const SizedBox(height: 12),
-                        if (_isLocating)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8.0),
-                            child: CircularProgressIndicator(),
-                          )
-                        else
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             children: [
-                              Text(
-                                _selectedRoadId != null 
-                                  ? appState.roads.firstWhere((r) => r.id == _selectedRoadId, orElse: () => RoadStatus(id: '', name: 'Unknown Road', status: 'passable', notes: '', updatedAt: DateTime.now())).name
-                                  : 'Not on monitored network',
-                                style: GoogleFonts.manrope(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.onSurface,
-                                ),
+                              Icon(
+                                _selectedRoadId != null
+                                    ? Icons.check_circle
+                                    : Icons.warning,
+                                color: _selectedRoadId != null
+                                    ? AppPalette.of(context).primary
+                                    : AppPalette.of(context).error,
+                                size: 16,
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _locationStatusMessage,
-                                style: GoogleFonts.inter(
-                                  fontSize: 13,
-                                  color: AppColors.onSurfaceVariant,
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _selectedRoadId != null
+                                      ? tr(context, 'DETECTED LOCATION')
+                                      : tr(context, 'LOCATION ERROR'),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 1.5,
+                                    color: _selectedRoadId != null
+                                        ? AppPalette.of(context).primary
+                                        : AppPalette.of(context).error,
+                                  ),
                                 ),
                               ),
                             ],
                           ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Flood level selection
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceContainerLowest,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'SELECT FLOOD LEVEL',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1.5,
-                            color: AppColors.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            _FloodLevelButton(
-                              icon: Icons.water_drop,
-                              label: 'Low',
-                              isSelected: _selectedFloodLevel == 0,
-                              color: AppColors.secondary,
-                              onTap: () =>
-                                  setState(() => _selectedFloodLevel = 0),
-                            ),
-                            const SizedBox(width: 12),
-                            _FloodLevelButton(
-                              icon: Icons.flood,
-                              label: 'Medium',
-                              isSelected: _selectedFloodLevel == 1,
-                              color: AppColors.primary,
-                              onTap: () =>
-                                  setState(() => _selectedFloodLevel = 1),
-                            ),
-                            const SizedBox(width: 12),
-                            _FloodLevelButton(
-                              icon: Icons.warning_rounded,
-                              label: 'High',
-                              isSelected: _selectedFloodLevel == 2,
-                              color: AppColors.tertiary,
-                              onTap: () =>
-                                  setState(() => _selectedFloodLevel = 2),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Evidence and Location row
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Evidence card
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: _pickImage,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: _selectedImage != null ? AppColors.secondaryContainer : AppColors.surfaceContainerLowest,
-                              borderRadius: BorderRadius.circular(100),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.03),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                          const SizedBox(height: 12),
+                          if (_isLocating)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 8.0),
+                              child: CircularProgressIndicator(),
+                            )
+                          else
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(_selectedImage != null ? Icons.check_circle : Icons.add_a_photo, size: 20, color: _selectedImage != null ? AppColors.onSecondaryContainer : AppColors.primary),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text(_selectedImage != null ? 'Photo Attached' : 'Add Photo', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: _selectedImage != null ? AppColors.onSecondaryContainer : AppColors.onSurface), overflow: TextOverflow.ellipsis),
+                                Text(
+                                  _selectedRoadId != null
+                                      ? appState.roads
+                                            .firstWhere(
+                                              (r) => r.id == _selectedRoadId,
+                                              orElse: () => RoadStatus(
+                                                id: '',
+                                                name: 'Unknown Road',
+                                                status: 'passable',
+                                                notes: '',
+                                                updatedAt: DateTime.now(),
+                                              ),
+                                            )
+                                            .name
+                                      : tr(context, 'Not on monitored network'),
+                                  style: GoogleFonts.manrope(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppPalette.of(context).onSurface,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  tr(context, _locationStatusMessage),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    color: AppPalette.of(
+                                      context,
+                                    ).onSurfaceVariant,
+                                  ),
                                 ),
                               ],
                             ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Flood level selection
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: AppPalette.of(context).surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
                           ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            tr(context, 'SELECT FLOOD LEVEL'),
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 1.5,
+                              color: AppPalette.of(context).onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            tr(
+                              context,
+                              'Choose the level you observed. An administrator will review your report.',
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          ReportFloodLevelSelector(
+                            selected: _selectedFloodLevel,
+                            onChanged: (value) =>
+                                setState(() => _selectedFloodLevel = value),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // SOS Emergency Toggle
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _isEmergency
+                            ? AppPalette.of(
+                                context,
+                              ).error.withValues(alpha: 0.08)
+                            : AppPalette.of(context).surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _isEmergency
+                              ? AppPalette.of(context).error
+                              : AppPalette.of(
+                                  context,
+                                ).outlineVariant.withValues(alpha: 0.15),
+                          width: _isEmergency ? 1.5 : 1,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      // Location card
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () async {
-                            final result = await Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const LocationPickerScreen()),
-                            );
-                            if (result != null && result is Map<String, dynamic>) {
-                              setState(() {
-                                _manualLocation = result;
-                                if (result.containsKey('roadId') && result['roadId'] != null) {
-                                  _selectedRoadId = result['roadId'] as String;
-                                  _locationStatusMessage = 'Pinned to monitored road.';
-                                } else {
-                                  _selectedRoadId = null;
-                                  _locationStatusMessage = 'Location is too far from any monitored road.';
-                                }
-                              });
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: AppColors.surfaceContainerLowest,
-                              borderRadius: BorderRadius.circular(100),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.03),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
+                              color: _isEmergency
+                                  ? AppPalette.of(context).error
+                                  : AppPalette.of(
+                                      context,
+                                    ).outlineVariant.withValues(alpha: 0.15),
+                              shape: BoxShape.circle,
                             ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                            child: Icon(
+                              Icons.emergency_rounded,
+                              size: 18,
+                              color: _isEmergency
+                                  ? AppPalette.of(context).onError
+                                  : AppPalette.of(context).onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(Icons.my_location, size: 20, color: AppColors.primary),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text(
-                                    _manualLocation != null ? 'Pin Set' : 'Location', 
-                                    style: GoogleFonts.inter(
-                                      fontSize: 13, 
-                                      fontWeight: FontWeight.w600, 
-                                      color: _manualLocation != null ? AppColors.primary : AppColors.onSurface,
-                                    ), 
-                                    overflow: TextOverflow.ellipsis,
+                                Text(
+                                  tr(context, 'I need immediate rescue'),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: _isEmergency
+                                        ? AppPalette.of(context).error
+                                        : AppPalette.of(context).onSurface,
+                                  ),
+                                ),
+                                Text(
+                                  tr(
+                                    context,
+                                    'Flag this report for urgent review.',
+                                  ),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    color: AppPalette.of(
+                                      context,
+                                    ).onSurfaceVariant,
                                   ),
                                 ),
                               ],
                             ),
                           ),
+                          Switch.adaptive(
+                            value: _isEmergency,
+                            activeThumbColor: AppPalette.of(context).error,
+                            onChanged: (val) {
+                              setState(() {
+                                _isEmergency = val;
+                                if (_isEmergency) {
+                                  if (_manualLocation != null &&
+                                      _selectedRoadId == null) {
+                                    _snapToNearestRoad(
+                                      (_manualLocation!['lat'] as num)
+                                          .toDouble(),
+                                      (_manualLocation!['lng'] as num)
+                                          .toDouble(),
+                                    );
+                                  }
+                                }
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    ReportPhotoAttachmentCard(
+                      preview: _selectedImage == null
+                          ? null
+                          : ResizeImage(
+                              FileImage(_selectedImage!),
+                              width: 1000,
+                            ),
+                      processing: _isProcessingImage,
+                      onPick: _isUploading || _isProcessingImage
+                          ? null
+                          : _pickImage,
+                      onRemove: _isUploading || _isProcessingImage
+                          ? null
+                          : () => setState(() {
+                              _selectedImage = null;
+                              _submission.invalidatePhoto();
+                              _photoUploader.forget();
+                            }),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: _isUploading || _isProcessingImage
+                          ? null
+                          : _chooseReportLocation,
+                      icon: const Icon(Icons.my_location, size: 18),
+                      label: Text(
+                        tr(context, 'Review report location'),
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Description
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceContainerLowest,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'DESCRIPTION',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1.5,
-                            color: AppColors.onSurfaceVariant,
+                    const SizedBox(height: 16),
+
+                    // Description
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: AppPalette.of(context).surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _descriptionController,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            hintText:
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            tr(context, 'DESCRIPTION'),
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 1.5,
+                              color: AppPalette.of(context).onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _descriptionController,
+                            maxLines: 3,
+                            decoration: InputDecoration(
+                              hintText: tr(
+                                context,
                                 "Describe the situation... (e.g. 'Road blocked by water, 2ft deep')",
-                            fillColor: AppColors.surfaceContainerLow,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              borderSide: BorderSide.none,
+                              ),
+                              fillColor: AppPalette.of(
+                                context,
+                              ).surfaceContainerLow,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                borderSide: BorderSide.none,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 32),
+                    const SizedBox(height: 32),
 
-                  // Submit button
-                  SizedBox(
-                    width: double.infinity,
-                    child: GestureDetector(
-                      onTap: _submitReport,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 20),
-                        decoration: BoxDecoration(
-                          color: AppColors.tertiary,
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color:
-                                  AppColors.tertiary.withValues(alpha: 0.2),
-                              blurRadius: 16,
-                              offset: const Offset(0, 4),
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: AppPalette.of(context).surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            tr(
+                              context,
+                              'When did you observe these conditions?',
                             ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            if (_isUploading) ...[
-                              const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                            style: GoogleFonts.manrope(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: AppPalette.of(context).onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppPalette.of(context).surfaceContainerLow,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  Icons.schedule_outlined,
+                                  size: 20,
+                                  color: AppPalette.of(context).primary,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    _observedAt == null
+                                        ? tr(
+                                            context,
+                                            'Observation time: now (recorded when you submit)',
+                                          )
+                                        : '${tr(context, 'Observation time')}: ${localizedDateTime(context, _observedAt!)}',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      height: 1.4,
+                                      color: AppPalette.of(
+                                        context,
+                                      ).onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _isUploading
+                                  ? null
+                                  : _chooseObservationTime,
+                              icon: const Icon(
+                                Icons.edit_calendar_outlined,
+                                size: 18,
                               ),
-                              const SizedBox(width: 12),
-                            ] else ...[
-                              const Icon(Icons.send_rounded, color: Colors.white, size: 24),
-                              const SizedBox(width: 12),
+                              label: Text(
+                                tr(context, 'Choose observation time'),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: _isUploading
+                                  ? null
+                                  : () => setState(() => _observedAt = null),
+                              icon: const Icon(Icons.update_outlined, size: 18),
+                              label: Text(tr(context, 'Observed now')),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    ReportUploadProgress(
+                      phase: _submission.phase,
+                      progress: _submission.progress,
+                    ),
+                    // Submit button
+                    SizedBox(
+                      width: double.infinity,
+                      child: GestureDetector(
+                        onTap: _isUploading || _isProcessingImage
+                            ? null
+                            : _submitReport,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          decoration: BoxDecoration(
+                            color: AppPalette.of(context).tertiary,
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppPalette.of(
+                                  context,
+                                ).tertiary.withValues(alpha: 0.2),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
+                              ),
                             ],
-                            Text(
-                              _isUploading ? 'UPLOADING...' : 'SUBMIT REPORT',
-                              style: GoogleFonts.manrope(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (_isUploading) ...[
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    color: AppPalette.of(context).onTertiary,
+                                    strokeWidth: 2.5,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                              ] else ...[
+                                Icon(
+                                  Icons.send_rounded,
+                                  color: AppPalette.of(context).onTertiary,
+                                  size: 24,
+                                ),
+                                const SizedBox(width: 12),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  _isUploading
+                                      ? tr(context, 'PLEASE WAIT...')
+                                      : tr(context, 'SUBMIT REPORT'),
+                                  style: GoogleFonts.manrope(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppPalette.of(context).onTertiary,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Center(
-                    child: Column(
-                      children: [
-                        Text(
-                          'TAP TO SEND EMERGENCY DATA',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 3.0,
-                            color: AppColors.onSurfaceVariant,
+                    const SizedBox(height: 16),
+                    Center(
+                      child: Column(
+                        children: [
+                          Text(
+                            tr(context, 'TAP TO SEND EMERGENCY DATA'),
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 3.0,
+                              color: AppPalette.of(context).onSurfaceVariant,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Your location is securely attached to verify accuracy.',
-                          style: GoogleFonts.inter(
-                            fontSize: 10,
-                            color: AppColors.onSurfaceVariant.withValues(alpha: 0.7),
+                          const SizedBox(height: 8),
+                          Text(
+                            tr(
+                              context,
+                              'Provided coordinates are checked against the road. GPS or a map pin does not independently verify what happened.',
+                            ),
+                            style: GoogleFonts.inter(
+                              fontSize: 10,
+                              color: AppPalette.of(
+                                context,
+                              ).onSurfaceVariant.withValues(alpha: 0.7),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
 
             // Success overlay
             if (_showSuccess)
               Container(
-                color: AppColors.surface.withValues(alpha: 0.9),
+                color: AppPalette.of(context).surface.withValues(alpha: 0.9),
                 child: Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -591,32 +1056,35 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
                         height: 96,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: AppColors.secondaryContainer,
+                          color: AppPalette.of(context).secondaryContainer,
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.check_circle,
                           size: 48,
-                          color: AppColors.onSecondaryContainer,
+                          color: AppPalette.of(context).onSecondaryContainer,
                         ),
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        'Report Received',
+                        tr(context, 'Report Received'),
                         style: GoogleFonts.manrope(
                           fontSize: 28,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.onSurface,
+                          color: AppPalette.of(context).onSurface,
                         ),
                       ),
                       const SizedBox(height: 8),
                       SizedBox(
                         width: 280,
                         child: Text(
-                          'Our team has been notified. Stay clear of high water areas and follow safe paths.',
+                          tr(
+                            context,
+                            'Report saved for review. Stay clear of high water. Submission does not confirm that rescue has been dispatched.',
+                          ),
                           textAlign: TextAlign.center,
                           style: GoogleFonts.inter(
                             fontSize: 15,
-                            color: AppColors.onSurfaceVariant,
+                            color: AppPalette.of(context).onSurfaceVariant,
                             height: 1.5,
                           ),
                         ),
@@ -630,15 +1098,15 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
                             vertical: 12,
                           ),
                           decoration: BoxDecoration(
-                            color: AppColors.primary,
+                            color: AppPalette.of(context).primary,
                             borderRadius: BorderRadius.circular(100),
                           ),
                           child: Text(
-                            'Return to Map',
+                            tr(context, 'Return to Map'),
                             style: GoogleFonts.inter(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
-                              color: Colors.white,
+                              color: AppPalette.of(context).onPrimary,
                             ),
                           ),
                         ),
@@ -653,36 +1121,108 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
     );
   }
 
+  Future<void> _chooseReportLocation() async {
+    final result = await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const LocationPickerScreen()));
+    if (mounted && result != null && result is Map<String, dynamic>) {
+      _locationGeneration++;
+      setState(() {
+        _isLocating = false;
+        _manualLocation = {...result, 'source': 'manual'};
+        if (result.containsKey('roadId') && result['roadId'] != null) {
+          _selectedRoadId = result['roadId'] as String;
+          _locationStatusMessage = 'Pinned to monitored road.';
+        } else {
+          _selectedRoadId = null;
+          _locationStatusMessage =
+              'Location is too far from any monitored road.';
+        }
+      });
+    }
+  }
+
+  Future<void> _chooseObservationTime() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _observedAt ?? now,
+      firstDate: now.subtract(const Duration(days: 1)),
+      lastDate: now,
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_observedAt ?? now),
+      builder: twelveHourPickerBuilder,
+    );
+    if (time == null || !mounted) return;
+    final selected = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    if (selected.isAfter(now.add(const Duration(minutes: 1))) ||
+        now.difference(selected) >= const Duration(hours: 24)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(context, 'Choose an observation within the last 24 hours.'),
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _observedAt = selected);
+  }
+
   void _submitReport() async {
+    if (!AppEnvironment.reportsEnabled || _isProcessingImage || _isUploading) {
+      return;
+    }
     final description = _descriptionController.text.trim();
+    if (_selectedFloodLevel == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(context, 'Please choose the flood level you observed.'),
+          ),
+        ),
+      );
+      return;
+    }
     if (_selectedRoadId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a road.')),
+        SnackBar(content: Text(tr(context, 'Please select a road.'))),
       );
       return;
     }
     if (description.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a description.')),
+        SnackBar(content: Text(tr(context, 'Please enter a description.'))),
       );
       return;
     }
-    
-    if (_isUploading) return;
-    
-    setState(() {
-      _isUploading = true;
-    });
 
     String floodLevelText = 'Medium';
     if (_selectedFloodLevel == 0) floodLevelText = 'Low';
     if (_selectedFloodLevel == 2) floodLevelText = 'High';
 
-    final roadIndex = AppStateService.instance.roads.indexWhere((r) => r.id == _selectedRoadId);
+    final roadIndex = AppStateService.instance.roads.indexWhere(
+      (r) => r.id == _selectedRoadId,
+    );
     if (roadIndex == -1) {
-      setState(() => _isUploading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selected road is no longer available. Please pick another.')),
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              'Selected road is no longer available. Please pick another.',
+            ),
+          ),
+        ),
       );
       return;
     }
@@ -693,117 +1233,109 @@ class _ReportSubmissionScreenState extends State<ReportSubmissionScreen> {
     if (_selectedFloodLevel == 2) titleText = 'Deep Water: ${road.name}';
 
     if (_manualLocation == null) {
-      setState(() => _isUploading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to determine location. Please use the map pin.')),
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              'Failed to determine location. Please use the map pin.',
+            ),
+          ),
+        ),
       );
       return;
     }
-    
-    Map<String, dynamic> locationData = _manualLocation!;
 
-    String? imageUrl;
-    if (_selectedImage != null) {
-      try {
-        final ref = FirebaseStorage.instance.ref().child('reports/${DateTime.now().millisecondsSinceEpoch}.jpg');
-        await ref.putFile(_selectedImage!, SettableMetadata(contentType: 'image/jpeg'));
-        imageUrl = await ref.getDownloadURL();
-      } catch (e) {
-        debugPrint('Image upload failed: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Photo failed to upload. Report submitted without attachment.')),
-          );
-        }
-      }
-    }
-    
-    if (imageUrl != null) {
-      locationData['imageUrl'] = imageUrl;
-    }
+    final locationData = Map<String, dynamic>.from(_manualLocation!);
+    // Retrying must not make old evidence appear newer.
+    _observedAt ??= DateTime.now();
+    locationData['observedAt'] = _observedAt!.toUtc().toIso8601String();
 
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr(context, 'Please sign in again.'))),
+      );
+      return;
+    }
+    final image = _selectedImage;
+    final selectedRoadId = road.id;
+    final emergency = _isEmergency;
+    final photoKey = image == null ? null : '$uid:${image.path}';
     try {
-      await AppStateService.instance.submitReport(
-        titleText,
-        description,
-        floodLevelText,
-        _selectedRoadId,
-        locationData,
+      await _submission.submit(
+        photoKey: photoKey,
+        prepare: () async =>
+            compute(prepareReportImage, await image!.readAsBytes()),
+        upload: (bytes, progress) =>
+            _photoUploader.upload(photoKey!, uid, bytes, progress),
+        save: (imageUrl) async {
+          if (FirebaseAuth.instance.currentUser?.uid != uid) {
+            throw StateError('ACCOUNT_CHANGED');
+          }
+          if (imageUrl != null) locationData['imageUrl'] = imageUrl;
+          await AppStateService.instance.submitReport(
+            emergency ? '[SOS RESCUE] $titleText' : titleText,
+            description,
+            floodLevelText,
+            selectedRoadId,
+            locationData,
+            emergency,
+          );
+        },
       );
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _isUploading = false;
-      });
-      if (e.toString().contains('SPAM_COOLDOWN')) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please wait 5 minutes before submitting another report to prevent spam.')));
+      if ((e is SparkProofException && e.code == 'resource-exhausted') ||
+          e.toString().contains('SPAM_COOLDOWN')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                'Please wait 5 minutes before submitting another report to prevent spam.',
+              ),
+            ),
+          ),
+        );
       } else if (e.toString().contains('OUT_OF_RANGE')) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Your GPS location is too far from this road to verify accuracy. Report rejected.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                'The provided location is too far from the selected road. Check your GPS or map pin.',
+              ),
+            ),
+          ),
+        );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Submission failed.')));
+        final unavailablePhoto =
+            (e is SparkProofException && e.code == 'photo-unavailable') ||
+            e.toString().contains('Photo is unavailable');
+        if (unavailablePhoto) {
+          _submission.invalidatePhoto();
+          _photoUploader.forget();
+        }
+        final message = unavailablePhoto
+            ? 'Your attached photo is no longer available online. Retry to upload it again.'
+            : e is SparkProofException
+            ? e.message
+            : e is PhotoUploadException
+            ? e.message
+            : e is FormatException
+            ? 'This photo cannot be processed. Please choose another JPG or PNG image.'
+            : _submission.hasUploadedPhoto
+            ? 'We could not confirm your report was saved. Retry to finish; your uploaded photo will be reused.'
+            : 'Report could not be saved. Check your connection and retry; your form is preserved.';
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
       return;
     }
 
-    if (!mounted) return;
-    setState(() {
-      _isUploading = false;
-      _showSuccess = true;
-    });
-  }
-}
-
-class _FloodLevelButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isSelected;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _FloodLevelButton({
-    required this.icon,
-    required this.label,
-    required this.isSelected,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? (color == AppColors.tertiary
-                    ? AppColors.tertiaryFixed
-                    : AppColors.surfaceContainerLow)
-                : AppColors.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isSelected ? color : Colors.transparent,
-              width: 2,
-            ),
-          ),
-          child: Column(
-            children: [
-              Icon(icon, size: 28, color: color),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.onSurface,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    if (!mounted || _submission.phase != ReportSubmissionPhase.complete) return;
+    setState(() => _showSuccess = true);
   }
 }

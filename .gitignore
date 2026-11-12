@@ -46,3 +46,63 @@ app.*.map.json
 
 # Secrets
 .env
+.env.fieldtest
+android/app/src/fieldtest/google-services.json
+
+/functions/node_modules/
+**/node_modules/
+/firebase-debug.log
+/firestore-debug.log
+/ui-debug.log
+
+.env.server-only.backup
+.analysis-reliability.txt
+.emulator-reliability.txt
+
+.tests-reliability.txt
+.parity-reliability.txt
+
+.analysis-account-security.txt
+.tests-account-security.txt
+.emulator-account-security.txt
+
+.analysis-photo-upload.txt
+.tests-photo-upload.txt
+.android-photo-probe.txt
+.build-photo-upload.txt
+
+.build-photo-profile.txt
+.analysis-report-reliability.txt
+.analysis-report-reliability-new.txt
+.tests-report-reliability.txt
+.emulator-report-reliability.txt
+.performance-work-baseline/
+.performance-results/
+.analysis-performance.txt
+.tests-performance.txt
+.emulator-performance.txt
+.analysis-performance-new.txt
+.emulator-performance-regression.txt
+.usability-work-baseline/
+.analysis-usability.txt
+.tests-usability.txt
+.analysis-usability-new.txt
+/scripts/localization/inventory.json
+/scripts/localization/remaining.json
+
+# Local Supabase CLI state and proof secrets
+/supabase/.temp/
+/supabase/.env.proof
+/supabase/.service-account-proof.json
+
+# Generated Android output and local installer binaries
+/android/build/
+/releases/*.apk
+/Microsoft/Windows/PowerShell/ModuleAnalysisCache
+/.tmp-pdf-reader/
+
+# Project-local agent runtimes, extraction workspace and generated code maps
+/_temp_skills/
+/.skill-tools/
+/graphify-out/
+/.scratch/

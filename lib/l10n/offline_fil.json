@@ -1,0 +1,10 @@
+{
+  "Saved roads": "Naka-save na mga kalsada",
+  "Loading saved roads…": "Binabasa ang naka-save na mga kalsada…",
+  "Saved roads could not be read. Return to the account screen to check your session or connection.": "Hindi mabasa ang naka-save na mga kalsada. Bumalik sa account screen upang suriin ang sesyon o koneksyon.",
+  "Saved information only. Present road conditions are unconfirmed. Routing and reporting require an online account check.": "Naka-save na impormasyon lamang ito. Hindi kumpirmado ang kasalukuyang kondisyon ng kalsada. Kailangan ng online na pagsusuri ng account para sa ruta at pagpapadala ng ulat.",
+  "No saved roads are available on this phone. Connect to load road data.": "Walang naka-save na kalsada sa teleponong ito. Kumonekta upang ma-load ang datos ng kalsada.",
+  "Last recorded status": "Huling nakatalang kondisyon",
+  "Unable to confirm your account. Check your connection and retry.": "Hindi makumpirma ang iyong account. Suriin ang koneksyon at subukan muli.",
+  "View saved roads (read only)": "Tingnan ang naka-save na kalsada (babasahin lamang)"
+}
